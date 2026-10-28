@@ -1,0 +1,23 @@
+services:
+  api:
+    build:
+      context: ./api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-sqlite:///./comat.db}
+      EXPIRY_WINDOW_DAYS: ${EXPIRY_WINDOW_DAYS:-7}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-claude-haiku-5-5}
+
+  web:
+    build:
+      context: ./web
+    ports:
+      - "5173:5173"
+    environment:
+      # Runs in the judge's browser, not inside the compose network, so it
+      # must point at the host-mapped API port, not the api service name.
+      VITE_API_URL: http://localhost:8000
+    depends_on:
+      - api

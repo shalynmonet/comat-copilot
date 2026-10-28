@@ -1,0 +1,17 @@
+# Python
+api/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+api/comat.db
+
+# Node
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo
+
+# Env
+.env
+
+# OS
+.DS_Store
