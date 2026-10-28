@@ -1,0 +1,25 @@
+# Production build for Cloud Run. The local docker-compose setup uses the
+# plain `Dockerfile` (vite dev server) instead -- that one's for iterating,
+# this one's for a real public deploy: a static build served by `serve`,
+# listening on Cloud Run's injected $PORT.
+FROM node:20-slim AS build
+WORKDIR /app
+
+COPY package.json ./
+RUN npm install
+
+COPY . .
+
+# Vite bakes VITE_* into the bundle at build time, not read at runtime --
+# so the API's URL has to be known before this build runs.
+ARG VITE_API_URL
+ENV VITE_API_URL=$VITE_API_URL
+RUN npm run build
+
+FROM node:20-slim
+WORKDIR /app
+RUN npm install -g serve@14
+COPY --from=build /app/dist ./dist
+
+EXPOSE 8080
+CMD ["sh", "-c", "serve -s dist -l ${PORT:-8080}"]
