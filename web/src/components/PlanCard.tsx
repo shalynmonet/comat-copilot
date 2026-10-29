@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Candidate, ExpiringPart, OverrideReason, Plan } from "../api";
 import { OVERRIDE_REASON_LABELS } from "../api";
+import { ShipmentTracker } from "./ShipmentTracker";
 
 interface Props {
   part: ExpiringPart | null;
@@ -276,6 +277,14 @@ export function PlanCard({
             <span>${plan.cost.toFixed(0)}</span>
           </div>
           <div className="plan-reason">"{plan.reason}"</div>
+
+          {plan.handoff_route && plan.shipment_status && (
+            <ShipmentTracker
+              handoffRoute={plan.handoff_route}
+              shipmentStatus={plan.shipment_status}
+              awbNumber={plan.awb_number}
+            />
+          )}
 
           {canDelay && plan.flight_number && (
             <div className="delay-controls">

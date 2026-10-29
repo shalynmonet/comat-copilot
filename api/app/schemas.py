@@ -50,3 +50,13 @@ class ChoosePlanRequest(BaseModel):
     flight_number: Optional[str] = None
     reason: OverrideReason
     note: Optional[str] = None
+
+
+class FieldSpecOut(BaseModel):
+    """A SAFE field's name/label/required-ness, so the frontend can render
+    field labels (e.g. for "Copy to SAFE") without duplicating
+    safe_fields.yaml."""
+
+    name: str
+    label: str
+    required: bool

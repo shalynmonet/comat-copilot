@@ -1,27 +1,41 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Candidate, ExpiringPart, Flight, OverrideReason, Plan, PlanEvent, Station } from "../api";
+import type {
+  Candidate,
+  ExpiringPart,
+  FieldSpec,
+  Flight,
+  OverrideReason,
+  Plan,
+  PlanEvent,
+  ShipmentDraft,
+  Station,
+} from "../api";
 import { StationMap } from "../components/StationMap";
 import { ExpiryQueue } from "../components/ExpiryQueue";
 import { PlanCard } from "../components/PlanCard";
 import { EventTimeline } from "../components/EventTimeline";
+import { ShipmentDraftPanel } from "../components/ShipmentDraftPanel";
 
 export function Dashboard() {
   const [stations, setStations] = useState<Station[]>([]);
   const [parts, setParts] = useState<ExpiringPart[]>([]);
   const [flights, setFlights] = useState<Flight[]>([]);
+  const [fieldSpecs, setFieldSpecs] = useState<FieldSpec[]>([]);
 
   const [selectedPart, setSelectedPart] = useState<ExpiringPart | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [events, setEvents] = useState<PlanEvent[]>([]);
+  const [drafts, setDrafts] = useState<ShipmentDraft[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.getStations().then(setStations).catch((e) => setError(String(e)));
     api.getExpiringParts().then(setParts).catch((e) => setError(String(e)));
     api.getFlights().then(setFlights).catch((e) => setError(String(e)));
+    api.getFieldSpecs().then(setFieldSpecs).catch((e) => setError(String(e)));
   }, []);
 
   const refreshCandidates = (serial: string) => {
@@ -38,10 +52,12 @@ export function Dashboard() {
       setCandidates([]);
       setPlan(null);
       setEvents([]);
+      setDrafts([]);
       return;
     }
     setPlan(null);
     setEvents([]);
+    setDrafts([]);
     refreshCandidates(selectedPart.serial);
   }, [selectedPart]);
 
@@ -52,6 +68,14 @@ export function Dashboard() {
     }
     api.getEvents(plan.id).then(setEvents).catch((e) => setError(String(e)));
   }, [plan?.id, plan?.status, plan?.reason, plan?.pending_option]);
+
+  useEffect(() => {
+    if (!plan) {
+      setDrafts([]);
+      return;
+    }
+    api.getShipments(plan.id).then(setDrafts).catch((e) => setError(String(e)));
+  }, [plan?.id, plan?.status]);
 
   const handleSelectPart = (part: ExpiringPart) => {
     setError(null);
@@ -122,6 +146,17 @@ export function Dashboard() {
     }
   };
 
+  const handleSubmitShipment = async (draftId: number) => {
+    setError(null);
+    try {
+      const result = await api.submitShipment(draftId);
+      setPlan(result.plan);
+      setDrafts((prev) => prev.map((d) => (d.id === result.draft.id ? result.draft : d)));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   const activeStatuses: Plan["status"][] = ["proposed", "approved", "at_risk", "re_routed"];
   const canDelay = !!plan && !!plan.flight_number && activeStatuses.includes(plan.status);
 
@@ -148,6 +183,7 @@ export function Dashboard() {
           onSimulateDelay={handleSimulateDelay}
           error={error}
         />
+        <ShipmentDraftPanel drafts={drafts} fieldSpecs={fieldSpecs} onSubmit={handleSubmitShipment} error={null} />
       </div>
       <EventTimeline events={events} />
     </div>

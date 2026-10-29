@@ -53,6 +53,37 @@ export const OVERRIDE_REASON_LABELS: Record<OverrideReason, string> = {
   other: "Other",
 };
 
+export type Priority = "AOG" | "MRD" | "MRX" | "STD";
+export type CommodityProfile = "critical_planeside" | "critical_cargo" | "low_cargo";
+export type HandoffRoute = "plane_side" | "to_cargo";
+export type ShipmentStatus =
+  | "booked"
+  | "awb_issued"
+  | "load_plan_updated"
+  | "accepted"
+  | "screened"
+  | "loaded"
+  | "handed_to_cargo"
+  | "delivered";
+
+export const TRACKER_STEPS: Record<HandoffRoute, { step: ShipmentStatus; label: string }[]> = {
+  plane_side: [
+    { step: "booked", label: "Booked" },
+    { step: "awb_issued", label: "AWB Issued" },
+    { step: "load_plan_updated", label: "Load Plan Updated" },
+    { step: "accepted", label: "Accepted" },
+    { step: "screened", label: "Screened" },
+    { step: "loaded", label: "Loaded" },
+    { step: "delivered", label: "Delivered" },
+  ],
+  to_cargo: [
+    { step: "booked", label: "Booked" },
+    { step: "awb_issued", label: "AWB Issued" },
+    { step: "handed_to_cargo", label: "Handed to Cargo" },
+    { step: "delivered", label: "Delivered" },
+  ],
+};
+
 export interface Plan {
   id: number;
   installed_serial: string;
@@ -69,6 +100,31 @@ export interface Plan {
   pending_cost: number | null;
   pending_risk_score: number | null;
   pending_reason: string | null;
+  priority: Priority | null;
+  commodity_profile: CommodityProfile | null;
+  handling_codes: string[];
+  handoff_route: HandoffRoute | null;
+  is_ron_package: boolean;
+  awb_number: string | null;
+  shipment_status: ShipmentStatus | null;
+}
+
+export type ShipmentDraftStatus = "draft" | "ready" | "submitted" | "superseded";
+
+export interface ShipmentDraft {
+  id: number;
+  plan_id: number;
+  fields: Record<string, unknown>;
+  status: ShipmentDraftStatus;
+  missing_fields: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FieldSpec {
+  name: string;
+  label: string;
+  required: boolean;
 }
 
 export interface Flight {
@@ -86,7 +142,7 @@ export interface Flight {
 export interface PlanEvent {
   id: number;
   plan_id: number;
-  event_type: "created" | "re-routed" | "approved" | "overridden" | "shipped" | "installed";
+  event_type: "created" | "re-routed" | "approved" | "overridden" | "draft-created" | "shipped" | "installed";
   created_at: string;
   detail: string | null;
 }
@@ -123,4 +179,8 @@ export const api = {
       body: JSON.stringify({ minutes }),
     }),
   getEvents: (planId?: number) => request<PlanEvent[]>(`/events${planId ? `?plan_id=${planId}` : ""}`),
+  getFieldSpecs: () => request<FieldSpec[]>("/shipments/field-specs"),
+  getShipments: (planId?: number) => request<ShipmentDraft[]>(`/shipments${planId ? `?plan_id=${planId}` : ""}`),
+  submitShipment: (id: number) =>
+    request<{ plan: Plan; draft: ShipmentDraft }>(`/shipments/${id}/submitted`, { method: "POST" }),
 };
