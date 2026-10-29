@@ -43,6 +43,7 @@ class PlanEventType(str, Enum):
     re_routed = "re-routed"
     approved = "approved"
     overridden = "overridden"
+    draft_created = "draft-created"
     shipped = "shipped"
     installed = "installed"
 

@@ -9,21 +9,21 @@ from typing import Optional
 
 from sqlmodel import Session
 
-from app.adapters.icargo_adapter import BookingRequest, CargoBookingError, get_cargo_adapter
-from app.adapters.shipping_adapter import ShippingTicketRequest, get_shipping_adapter
+from app.adapters.safe_adapter import build_draft
 from app.models import (
     OVERRIDE_REASON_LABELS,
-    Aircraft,
     InstalledPart,
     OverrideReason,
-    Part,
     Plan,
     PlanEvent,
     PlanEventType,
     PlanOption,
     PlanStatus,
+    ShipmentDraft,
+    ShipmentDraftStatus,
 )
 from app.planner.candidates import build_candidates, deadline_for
+from app.planner.priority_rules import assign_priority_profile_route
 from app.planner.score import score_candidate
 
 
@@ -42,64 +42,34 @@ def clear_pending(plan: Plan) -> None:
     plan.pending_reason = None
 
 
-def _fulfill_approved_plan(session: Session, plan: Plan) -> None:
-    """Runs the paperwork for an approved plan: a COMAT option holds real
-    cargo space via iCargo, and every option gets a shipping ticket / work
-    order via the shipping system -- the two artifacts the demo script
-    calls out ("a work order and shipping ticket generate"). Logged as one
-    "shipped" plan_event. A failed booking is logged, never blocking.
+def _build_and_save_draft(session: Session, plan: Plan, now: datetime) -> None:
+    """On approval: compute the plan's priority/profile/route, then build
+    and save a SAFE-ready draft for Stores to review. Copilot never
+    submits it -- that's a human action (see POST /shipments/{id}/submitted
+    in a later step). Logged as a "draft created" plan_event.
     """
-    installed = session.get(InstalledPart, plan.installed_serial)
-    part = session.get(Part, installed.part_number)
-    aircraft = session.get(Aircraft, installed.tail_number)
-    lines = []
+    assign_priority_profile_route(session, plan, now)
+    result = build_draft(session, plan)
 
-    if plan.option == PlanOption.comat and plan.flight_number:
-        adapter = get_cargo_adapter()
-        try:
-            confirmation = adapter.book(
-                session,
-                BookingRequest(
-                    flight_number=plan.flight_number,
-                    part_number=part.part_number,
-                    serial=installed.serial,
-                    weight_lb=part.weight_lb,
-                ),
-            )
-            lines.append(
-                f"iCargo booking confirmed: {confirmation.confirmation_number} "
-                f"(AWB {confirmation.awb_number}) on {confirmation.flight_number}"
-            )
-        except CargoBookingError as e:
-            lines.append(f"cargo booking failed: {e}")
-
-    ticket = get_shipping_adapter().create_ticket(
-        ShippingTicketRequest(
-            plan_id=plan.id,
-            option=plan.option.value,
-            part_number=part.part_number,
-            part_description=part.description,
-            serial=installed.serial,
-            source=plan.source,
-            destination=aircraft.overnight_station,
-            flight_number=plan.flight_number,
-            is_dangerous_goods=part.is_dangerous_goods,
-        )
+    draft = ShipmentDraft(
+        plan_id=plan.id,
+        fields=result.fields,
+        status=ShipmentDraftStatus(result.status),
+        missing_fields=result.missing_fields,
+        created_at=now,
+        updated_at=now,
     )
-    lines.append(f"shipping ticket {ticket.ticket_number} / work order {ticket.work_order_number}")
-    lines.extend(ticket.special_handling)
+    session.add(draft)
 
-    session.add(
-        PlanEvent(
-            plan_id=plan.id,
-            event_type=PlanEventType.shipped,
-            created_at=datetime.now(),
-            detail=" -- ".join(lines),
-        )
-    )
+    if result.missing_fields:
+        detail = f"draft created, status=draft -- missing: {', '.join(result.missing_fields)}"
+    else:
+        detail = "draft created, status=ready for Stores to review and submit"
+    session.add(PlanEvent(plan_id=plan.id, event_type=PlanEventType.draft_created, created_at=now, detail=detail))
 
 
-def approve_plan(session: Session, plan: Plan) -> Plan:
+def approve_plan(session: Session, plan: Plan, now: Optional[datetime] = None) -> Plan:
+    now = now or datetime.now()
     if plan.pending_option is not None:
         # A flight change staged a new recommendation while this plan was
         # approved -- approving now adopts it.
@@ -113,8 +83,8 @@ def approve_plan(session: Session, plan: Plan) -> Plan:
 
     plan.status = PlanStatus.approved
     session.add(plan)
-    session.add(PlanEvent(plan_id=plan.id, event_type=PlanEventType.approved, created_at=datetime.now()))
-    _fulfill_approved_plan(session, plan)
+    session.add(PlanEvent(plan_id=plan.id, event_type=PlanEventType.approved, created_at=now))
+    _build_and_save_draft(session, plan, now)
     session.commit()
     session.refresh(plan)
     return plan
@@ -129,7 +99,9 @@ def choose_alternative(
     flight_number: Optional[str],
     reason: OverrideReason,
     note: Optional[str],
+    now: Optional[datetime] = None,
 ) -> Plan:
+    now = now or datetime.now()
     deadline = deadline_for(installed)
     candidates = build_candidates(session, installed)  # feasible only
     match = next(
@@ -163,11 +135,11 @@ def choose_alternative(
         PlanEvent(
             plan_id=plan.id,
             event_type=PlanEventType.overridden,
-            created_at=datetime.now(),
+            created_at=now,
             detail=f"chose {match.option.value} from {match.source}{via} instead -- {reason_text}",
         )
     )
-    _fulfill_approved_plan(session, plan)
+    _build_and_save_draft(session, plan, now)
     session.commit()
     session.refresh(plan)
     return plan

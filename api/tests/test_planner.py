@@ -71,6 +71,25 @@ def test_dangerous_goods_part_flags_every_candidate(session, hero_part):
     assert all(c.is_dangerous_goods for c in candidates)
 
 
+def test_dg_part_is_disqualified_from_a_flight_that_does_not_accept_dg(session, hero_part):
+    from sqlmodel import select
+
+    from app.models import Flight
+
+    flight = session.exec(select(Flight).where(Flight.flight_number == "EV2301")).one()
+    flight.accepts_dg = False
+    session.add(flight)
+    session.commit()
+
+    candidates = build_candidates(session, hero_part, now=NOW, include_disqualified=True)
+    comat = next(c for c in candidates if c.source == "DFW" and c.flight_number == "EV2301")
+    assert comat.disqualified
+    assert "dangerous goods" in comat.disqualified_reason
+
+    feasible = build_candidates(session, hero_part, now=NOW)
+    assert not any(c.flight_number == "EV2301" for c in feasible)
+
+
 def test_risk_of_slack_bounds():
     assert risk_of_slack(48) == 0.0
     assert risk_of_slack(0) == 1.0

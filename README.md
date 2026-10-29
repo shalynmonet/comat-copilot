@@ -84,13 +84,15 @@ comat-copilot/
       schemas.py           # request/response shapes that aren't tables
       planner/
         candidates.py     # finds COMAT / transfer / buy options, flags disqualified ones with why
-        score.py          # cost + risk scoring, ranking
+        score.py          # cost + risk scoring (+ STD bump risk), ranking
+        priority_rules.py # priority/commodity-profile/handoff-route rules
+        flight_search.py  # direct + hub-connection flight search, booking cutoffs
         decisions.py      # approve / choose-alternative -- the human-decision paths
         replan.py         # reruns active plans when a flight changes
       adapters/            # the pilot swap points -- mock today, a real system behind each later
         sceptre_adapter.py    # parts & expiry (PARTS_ADAPTER)
         icargo_adapter.py     # cargo capacity & booking (CARGO_ADAPTER)
-        shipping_adapter.py   # shipping ticket & work order (SHIPPING_ADAPTER)
+        safe_adapter.py       # SAFE-ready shipment draft (safe_fields.yaml)
       ai/
         explain.py        # Claude writes the one-line reason; templated fallback with no key
       routes/              # parts, plans, flights, events, stations

@@ -1,0 +1,100 @@
+# The field list SAFE needs for a shipment, so it can be swapped to the
+# real SAFE field names later without touching safe_adapter.py's code.
+# `source` here is documentation of where each value comes from -- the
+# actual extraction is explicit code in safe_adapter.py's build_draft(),
+# not a generic path resolver, so a wrong mapping fails a test loudly
+# instead of silently through a typo'd string.
+
+fields:
+  - name: part_number
+    label: "Part Number"
+    source: part.part_number
+    required: true
+  - name: serial
+    label: "Serial Number"
+    source: installed_part.serial
+    required: true
+  - name: description
+    label: "Description"
+    source: part.description
+    required: true
+  - name: quantity
+    label: "Quantity"
+    source: "literal: 1"
+    required: true
+  - name: condition
+    label: "Condition"
+    source: "derived: serviceable for COMAT/transfer, new for buy"
+    required: true
+  - name: origin_station
+    label: "Origin Station"
+    source: plan.source
+    required: true
+  - name: dest_station
+    label: "Destination Station"
+    source: aircraft.overnight_station
+    required: true
+  - name: flight_legs
+    label: "Flight Leg(s)"
+    source: plan.flight_number
+    required: false
+  - name: flight_date
+    label: "Flight Date"
+    source: flight.sched_dep
+    required: false
+  - name: tail_number
+    label: "Tail Number"
+    source: installed_part.tail_number
+    required: true
+  - name: priority
+    label: "Priority"
+    source: plan.priority
+    required: true
+  - name: commodity_profile
+    label: "Commodity Profile"
+    source: plan.commodity_profile
+    required: true
+  - name: handling_codes
+    label: "Handling Codes"
+    source: plan.handling_codes
+    required: true
+  - name: handoff_route
+    label: "Handoff Route"
+    source: plan.handoff_route
+    required: true
+  - name: is_dangerous_goods
+    label: "Dangerous Goods"
+    source: part.is_dangerous_goods
+    required: true
+  - name: dg_class
+    label: "DG Class"
+    source: part.dg_class
+    required: false
+  - name: weight_lb
+    label: "Weight (lb)"
+    source: part.weight_lb
+    required: true
+  - name: agent_pal
+    label: "Agent PAL"
+    source: origin_station.pal_number
+    required: true
+  - name: shipper_pal
+    label: "Shipper PAL"
+    source: origin_station.pal_number
+    required: true
+  - name: consignee_pal
+    label: "Consignee PAL"
+    source: dest_station.pal_number
+    required: true
+  - name: awb_number
+    label: "AWB Number"
+    source: plan.awb_number
+    required: false
+  - name: requested_by
+    label: "Requested By"
+    source: "literal: COMAT Copilot"
+    required: true
+  - name: notes
+    label: "Notes"
+    source: plan.reason
+    required: false

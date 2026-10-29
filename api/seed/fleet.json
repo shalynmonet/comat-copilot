@@ -1,13 +1,13 @@
 {
   "stations": [
-    {"code": "DFW", "name": "Dallas-Fort Worth", "lat": 32.8998, "lon": -97.0403, "has_maintenance": true, "stores_capacity": 500},
-    {"code": "ORD", "name": "Chicago O'Hare", "lat": 41.9742, "lon": -87.9073, "has_maintenance": true, "stores_capacity": 300},
-    {"code": "CVG", "name": "Cincinnati/N. Kentucky", "lat": 39.0488, "lon": -84.6678, "has_maintenance": false, "stores_capacity": 80},
-    {"code": "MEM", "name": "Memphis", "lat": 35.0424, "lon": -89.9767, "has_maintenance": false, "stores_capacity": 60},
-    {"code": "AUS", "name": "Austin-Bergstrom", "lat": 30.1975, "lon": -97.6664, "has_maintenance": false, "stores_capacity": 60},
-    {"code": "TUL", "name": "Tulsa", "lat": 36.1984, "lon": -95.8881, "has_maintenance": false, "stores_capacity": 50},
-    {"code": "OKC", "name": "Oklahoma City Will Rogers", "lat": 35.3931, "lon": -97.6007, "has_maintenance": false, "stores_capacity": 50},
-    {"code": "SDF", "name": "Louisville Muhammad Ali", "lat": 38.1744, "lon": -85.7360, "has_maintenance": false, "stores_capacity": 60}
+    {"code": "DFW", "name": "Dallas-Fort Worth", "lat": 32.8998, "lon": -97.0403, "has_maintenance": true, "stores_capacity": 500, "pal_number": "PAL-DFW-014"},
+    {"code": "ORD", "name": "Chicago O'Hare", "lat": 41.9742, "lon": -87.9073, "has_maintenance": true, "stores_capacity": 300, "pal_number": "PAL-ORD-027"},
+    {"code": "CVG", "name": "Cincinnati/N. Kentucky", "lat": 39.0488, "lon": -84.6678, "has_maintenance": false, "stores_capacity": 80, "pal_number": "PAL-CVG-038"},
+    {"code": "MEM", "name": "Memphis", "lat": 35.0424, "lon": -89.9767, "has_maintenance": false, "stores_capacity": 60, "pal_number": "PAL-MEM-041"},
+    {"code": "AUS", "name": "Austin-Bergstrom", "lat": 30.1975, "lon": -97.6664, "has_maintenance": false, "stores_capacity": 60, "pal_number": "PAL-AUS-052"},
+    {"code": "TUL", "name": "Tulsa", "lat": 36.1984, "lon": -95.8881, "has_maintenance": false, "stores_capacity": 50, "pal_number": "PAL-TUL-063"},
+    {"code": "OKC", "name": "Oklahoma City Will Rogers", "lat": 35.3931, "lon": -97.6007, "has_maintenance": false, "stores_capacity": 50, "pal_number": "PAL-OKC-074"},
+    {"code": "SDF", "name": "Louisville Muhammad Ali", "lat": 38.1744, "lon": -85.7360, "has_maintenance": false, "stores_capacity": 60, "pal_number": "PAL-SDF-085"}
   ],
   "aircraft": [
     {"tail_number": "N501EV", "type": "E175", "current_station": "CVG", "overnight_station": "CVG"},

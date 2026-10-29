@@ -89,6 +89,8 @@ def _comat_candidates(
             reason = None
             if spare.condition != InventoryCondition.serviceable:
                 reason = f"the {spare.station} spare is {spare.condition.value}"
+            elif part.is_dangerous_goods and not flight.accepts_dg:
+                reason = f"flight {flight.flight_number} doesn't accept dangerous goods"
             elif flight.cargo_capacity_lb < part.weight_lb:
                 reason = f"flight {flight.flight_number} doesn't have the cargo capacity for this part"
             elif flight.sched_arr > deadline:

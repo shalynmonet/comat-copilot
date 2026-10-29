@@ -205,6 +205,10 @@ def seed_flights(session, fleet: dict, rng: random.Random) -> None:
                 sched_arr=datetime.combine(TODAY, arr_time),
                 status=FlightStatus.scheduled,
                 cargo_capacity_lb=CARGO_CAPACITY_LB[a["type"]],
+                # Every seeded flight accepts DG for now (all domestic, same
+                # fleet type); a deliberate "DG part, not every flight is
+                # DG-approved" decoy is a later seed-data step.
+                accepts_dg=True,
             )
         )
 

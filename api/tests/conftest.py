@@ -39,9 +39,9 @@ def session():
 def hero_part(session):
     session.add_all(
         [
-            Station(code="DFW", name="Dallas-Fort Worth", lat=32.8998, lon=-97.0403, has_maintenance=True, stores_capacity=500),
-            Station(code="CVG", name="Cincinnati/N. Kentucky", lat=39.0488, lon=-84.6678, has_maintenance=False, stores_capacity=80),
-            Station(code="ORD", name="Chicago O'Hare", lat=41.9742, lon=-87.9073, has_maintenance=True, stores_capacity=300),
+            Station(code="DFW", name="Dallas-Fort Worth", lat=32.8998, lon=-97.0403, has_maintenance=True, stores_capacity=500, pal_number="PAL-DFW-01"),
+            Station(code="CVG", name="Cincinnati/N. Kentucky", lat=39.0488, lon=-84.6678, has_maintenance=False, stores_capacity=80, pal_number="PAL-CVG-01"),
+            Station(code="ORD", name="Chicago O'Hare", lat=41.9742, lon=-87.9073, has_maintenance=True, stores_capacity=300, pal_number="PAL-ORD-01"),
             Aircraft(tail_number="N501EV", type="E175", current_station="CVG", overnight_station="CVG"),
             Part(part_number="OXY-BTL-02", description="Crew Oxygen Bottle, 2L", shelf_life_days=730, is_rotable=False, unit_cost=850, weight_lb=18, is_dangerous_goods=True),
         ]
@@ -89,6 +89,7 @@ def hero_part(session):
             sched_arr=datetime.combine(TODAY, time(20, 25)),
             status=FlightStatus.scheduled,
             cargo_capacity_lb=2500.0,
+            accepts_dg=True,  # the hero part is dangerous goods (a crew oxygen bottle)
         )
     )
     # Decoy 2: cheaper vendor quote that arrives after the deadline.

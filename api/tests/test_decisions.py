@@ -1,6 +1,8 @@
 """Covers the two human-decision paths: approving a plan (including picking
 up a flight-change's staged recommendation), and overriding the system's
-pick with a different feasible option plus a reason.
+pick with a different feasible option plus a reason. Both paths also
+build and save a SAFE-ready shipment draft -- never submitted by Copilot
+itself, just prepared for Stores to review.
 """
 
 from datetime import timedelta
@@ -8,7 +10,20 @@ from datetime import timedelta
 import pytest
 from sqlmodel import select
 
-from app.models import Flight, FlightStatus, OverrideReason, Plan, PlanEvent, PlanOption, PlanStatus
+from app.models import (
+    CommodityProfile,
+    Flight,
+    FlightStatus,
+    HandoffRoute,
+    OverrideReason,
+    Plan,
+    PlanEvent,
+    PlanOption,
+    PlanStatus,
+    Priority,
+    ShipmentDraft,
+    ShipmentDraftStatus,
+)
 from app.planner.candidates import build_candidates
 from app.planner.decisions import NoSuchCandidate, approve_plan, choose_alternative
 from app.planner.replan import replan_for_flight
@@ -35,25 +50,37 @@ def test_approve_on_a_plain_proposed_plan_just_flips_status(session, hero_part):
     assert result.option == PlanOption.comat  # unchanged, nothing was pending
 
 
-def test_approving_a_comat_plan_books_cargo_and_a_shipping_ticket(session, hero_part):
+def test_approving_the_hero_plan_builds_a_ready_draft_with_mrd_priority(session, hero_part):
     plan = _hero_plan(session, hero_part, PlanStatus.proposed)
     assert plan.option == PlanOption.comat  # the hero fixture's winning option
 
-    approve_plan(session, plan)
+    result = approve_plan(session, plan, now=NOW)
+
+    # only one DFW->CVG flight exists in the fixture -- it's the last
+    # viable one, so Must Ride, not Standard.
+    assert result.priority == Priority.mrd
+    assert result.commodity_profile == CommodityProfile.critical_planeside
+    assert result.handoff_route == HandoffRoute.plane_side
+    assert result.handling_codes == ["AOG"]  # EZP is added on save, not here
+
+    draft = session.exec(select(ShipmentDraft).where(ShipmentDraft.plan_id == plan.id)).one()
+    assert draft.status == ShipmentDraftStatus.ready
+    assert draft.missing_fields == []
+    assert draft.fields["part_number"] == "OXY-BTL-02"
+    assert draft.fields["is_dangerous_goods"] is True
+    assert draft.fields["agent_pal"] == "PAL-DFW-01"
+    assert draft.fields["consignee_pal"] == "PAL-CVG-01"
+    assert draft.fields["flight_legs"] == ["EV2301"]
 
     events = session.exec(select(PlanEvent).where(PlanEvent.plan_id == plan.id)).all()
-    shipped = [e for e in events if e.event_type.value == "shipped"]
-    assert len(shipped) == 1
-    assert "iCargo booking confirmed" in shipped[0].detail
-    assert "EV2301" in shipped[0].detail
-    assert "shipping ticket" in shipped[0].detail
-    assert "work order" in shipped[0].detail
-    # the hero part is seeded as dangerous goods
-    assert "DANGEROUS GOODS" in shipped[0].detail
+    draft_events = [e for e in events if e.event_type.value == "draft-created"]
+    assert len(draft_events) == 1
+    assert "ready" in draft_events[0].detail
 
 
-def test_approving_a_non_comat_plan_still_gets_a_shipping_ticket_but_no_booking(session, hero_part):
+def test_a_buy_plan_has_no_station_pals_and_stays_in_draft_status(session, hero_part):
     plan = _hero_plan(session, hero_part, PlanStatus.proposed)
+
     result = choose_alternative(
         session,
         plan,
@@ -63,15 +90,23 @@ def test_approving_a_non_comat_plan_still_gets_a_shipping_ticket_but_no_booking(
         flight_number=None,
         reason=OverrideReason.preferred_vendor,
         note=None,
+        now=NOW,
     )
     assert result.option == PlanOption.buy
 
+    draft = session.exec(select(ShipmentDraft).where(ShipmentDraft.plan_id == plan.id)).one()
+    # a vendor isn't one of our stations, so there's no PAL to fill --
+    # correctly keeps the draft at "draft" rather than faking a value.
+    assert draft.status == ShipmentDraftStatus.draft
+    assert "agent_pal" in draft.missing_fields
+    assert "shipper_pal" in draft.missing_fields
+    assert draft.fields["origin_station"] == "AeroSource"
+    assert draft.fields["condition"] == "new"
+
     events = session.exec(select(PlanEvent).where(PlanEvent.plan_id == plan.id)).all()
-    shipped = [e for e in events if e.event_type.value == "shipped"]
-    assert len(shipped) == 1
-    assert "shipping ticket" in shipped[0].detail
-    assert "work order" in shipped[0].detail
-    assert "iCargo booking" not in shipped[0].detail
+    draft_events = [e for e in events if e.event_type.value == "draft-created"]
+    assert len(draft_events) == 1
+    assert "missing" in draft_events[0].detail
 
 
 def test_approve_adopts_a_pending_recommendation(session, hero_part):

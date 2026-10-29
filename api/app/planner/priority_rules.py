@@ -12,15 +12,20 @@ identifiers, but the route and handling codes behind each one come from
 api/config/private_codes.yaml (see app/config.py) -- the one place a
 pilot's real codes live.
 
-This module only computes; it doesn't attach these values to a Plan or
-Candidate yet. That wiring happens once a concrete flow (building a
-shipment draft, say) needs it -- see the step this was built for.
+assign_priority_profile_route() is the integration point: it populates
+these fields directly on a Plan, right before a SAFE draft is built from
+it (see app/adapters/safe_adapter.py and app/planner/decisions.py).
 """
 
 from __future__ import annotations
 
+from datetime import datetime, time
+
+from sqlmodel import Session, select
+
 from app.config import load_private_codes
-from app.models import CommodityProfile, HandoffRoute, Priority
+from app.models import Aircraft, CommodityProfile, Flight, HandoffRoute, InstalledPart, Part, Plan, PlanOption, Priority
+from app.planner.flight_search import search_flight_options
 
 PRIORITY_LABELS = {
     Priority.aog: "AOG",
@@ -126,3 +131,37 @@ def priority_reason_fragment(priority: Priority, viable_flight_count: int, part_
 
 def build_reason_line(priority: Priority, route: HandoffRoute, why: str) -> str:
     return f"{ROUTE_LABELS[route]}: {PRIORITY_LABELS[priority]} {why}."
+
+
+def assign_priority_profile_route(session: Session, plan: Plan, now: datetime) -> None:
+    """Computes priority/commodity_profile/handoff_route/handling_codes
+    for whatever option is currently on `plan` and sets them directly.
+    Only COMAT plans get a flight-backup-based priority (that's the only
+    option with "flights" to count); transfer/buy default to STD, since
+    neither has a backup-flight concept, unless the part has expired.
+    """
+    installed = session.get(InstalledPart, plan.installed_serial)
+    part = session.get(Part, installed.part_number)
+    part_expired = installed.expires_on < now.date()
+
+    is_international = False
+    if plan.option == PlanOption.comat and plan.flight_number:
+        aircraft = session.get(Aircraft, installed.tail_number)
+        deadline = datetime.combine(installed.expires_on, time.min)
+        viable = search_flight_options(session, plan.source, aircraft.overnight_station, part, now, deadline)
+        priority = compute_priority(len(viable), part_expired)
+
+        flight = session.exec(select(Flight).where(Flight.flight_number == plan.flight_number)).first()
+        is_international = bool(flight and flight.is_international)
+    else:
+        priority = Priority.aog if part_expired else Priority.std
+
+    oversize = is_effectively_oversize(is_oversize=part.is_oversize, weight_lb=part.weight_lb)
+    profile, route = compute_profile_and_route(
+        priority, is_oversize=oversize, is_international=is_international, is_ron_package=plan.is_ron_package
+    )
+
+    plan.priority = priority
+    plan.commodity_profile = profile
+    plan.handoff_route = route
+    plan.handling_codes = handling_codes_at_creation(profile)
