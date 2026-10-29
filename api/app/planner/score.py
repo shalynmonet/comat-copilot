@@ -1,13 +1,17 @@
 """Scores and ranks candidates: score = cost + w * P(miss deadline) * AOG cost.
 
 Risk climbs linearly as the slack between estimated arrival and the
-deadline shrinks, and hits 1.0 once there's no slack left at all.
+deadline shrinks, and hits 1.0 once there's no slack left at all. An STD
+priority also adds the placeholder bump risk from config (Priority.std
+can be bumped for space; MRD and AOG can't, so they carry none).
 """
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
-from app.models import Plan, PlanStatus
+from app.config import load_private_codes
+from app.models import Plan, PlanStatus, Priority
 from app.planner.candidates import Candidate
 
 AOG_COST = 50_000.0
@@ -28,15 +32,19 @@ def risk_of_slack(slack_hours: float) -> float:
     return max(0.0, min(1.0, 1.0 - slack_hours / RISK_BUFFER_HOURS))
 
 
-def score_candidate(candidate: Candidate, deadline: datetime) -> ScoredCandidate:
+def score_candidate(candidate: Candidate, deadline: datetime, priority: Optional[Priority] = None) -> ScoredCandidate:
     slack_hours = (deadline - candidate.eta).total_seconds() / 3600
     risk = risk_of_slack(slack_hours)
     score = candidate.cost + RISK_WEIGHT * risk * AOG_COST
+    if priority == Priority.std:
+        score += load_private_codes().std_bump_risk * AOG_COST
     return ScoredCandidate(candidate=candidate, risk_score=risk, score=score)
 
 
-def rank_candidates(candidates: list[Candidate], deadline: datetime) -> list[ScoredCandidate]:
-    scored = [score_candidate(c, deadline) for c in candidates]
+def rank_candidates(
+    candidates: list[Candidate], deadline: datetime, priority: Optional[Priority] = None
+) -> list[ScoredCandidate]:
+    scored = [score_candidate(c, deadline, priority) for c in candidates]
     return sorted(scored, key=lambda s: s.score)
 
 
