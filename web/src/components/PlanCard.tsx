@@ -1,5 +1,6 @@
 import { useState } from "react";
-import type { Candidate, ExpiringPart, Plan } from "../api";
+import type { Candidate, ExpiringPart, OverrideReason, Plan } from "../api";
+import { OVERRIDE_REASON_LABELS } from "../api";
 
 interface Props {
   part: ExpiringPart | null;
@@ -7,14 +8,28 @@ interface Props {
   loadingCandidates: boolean;
   plan: Plan | null;
   canDelay: boolean;
-  onProposeAndApprove: () => Promise<void>;
+  onApproveTop: () => Promise<void>;
+  onChooseAlternative: (candidate: Candidate, reason: OverrideReason, note: string) => Promise<void>;
+  onApprovePending: () => Promise<void>;
   onSimulateDelay: (minutes: number) => Promise<void>;
   error: string | null;
 }
 
+const EDITABLE_STATUSES = new Set(["proposed", "approved", "at_risk", "re_routed"]);
+const OVERRIDE_REASONS: OverrideReason[] = [
+  "flight_usually_full",
+  "preferred_vendor",
+  "spare_needed_elsewhere",
+  "other",
+];
+
 function formatEta(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function candidateKey(c: { option: string; source: string | null; flight_number: string | null }): string {
+  return `${c.option}|${c.source ?? ""}|${c.flight_number ?? ""}`;
 }
 
 export function PlanCard({
@@ -23,12 +38,17 @@ export function PlanCard({
   loadingCandidates,
   plan,
   canDelay,
-  onProposeAndApprove,
+  onApproveTop,
+  onChooseAlternative,
+  onApprovePending,
   onSimulateDelay,
   error,
 }: Props) {
   const [minutes, setMinutes] = useState(600);
   const [busy, setBusy] = useState(false);
+  const [overridingKey, setOverridingKey] = useState<string | null>(null);
+  const [overrideReason, setOverrideReason] = useState<OverrideReason>("flight_usually_full");
+  const [overrideNote, setOverrideNote] = useState("");
 
   if (!part) {
     return (
@@ -39,10 +59,44 @@ export function PlanCard({
     );
   }
 
-  const handlePropose = async () => {
+  const editable = !plan || EDITABLE_STATUSES.has(plan.status);
+  const feasible = candidates.filter((c) => !c.disqualified);
+  const disqualified = candidates.filter((c) => c.disqualified);
+  const topKey = feasible[0] ? candidateKey(feasible[0]) : null;
+  const selectedKey = plan ? candidateKey(plan) : null;
+  const hasPending = !!(plan && plan.pending_option);
+
+  const startOverride = (c: Candidate) => {
+    setOverridingKey(candidateKey(c));
+    setOverrideReason("flight_usually_full");
+    setOverrideNote("");
+  };
+
+  const cancelOverride = () => setOverridingKey(null);
+
+  const confirmOverride = async (c: Candidate) => {
     setBusy(true);
     try {
-      await onProposeAndApprove();
+      await onChooseAlternative(c, overrideReason, overrideNote);
+      setOverridingKey(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleApproveTop = async () => {
+    setBusy(true);
+    try {
+      await onApproveTop();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleApprovePending = async () => {
+    setBusy(true);
+    try {
+      await onApprovePending();
     } finally {
       setBusy(false);
     }
@@ -68,17 +122,124 @@ export function PlanCard({
         </div>
       </div>
 
+      {plan && plan.status === "at_risk" && (
+        <div className="at-risk-banner">
+          <div className="row">
+            <span className="status-badge" data-status="at_risk">
+              at risk
+            </span>
+            <span>a booked flight changed</span>
+          </div>
+          {hasPending ? (
+            <>
+              <div className="pending-rec">
+                <div className="row">
+                  <span className="option-badge">new rec: {plan.pending_option}</span>
+                  <span>${plan.pending_cost?.toFixed(0)}</span>
+                </div>
+                <div className="row">
+                  <span>
+                    {plan.pending_source}
+                    {plan.pending_flight_number ? ` · ${plan.pending_flight_number}` : ""}
+                  </span>
+                  <span>risk {((plan.pending_risk_score ?? 0) * 100).toFixed(0)}%</span>
+                </div>
+                <div className="plan-reason">"{plan.pending_reason}"</div>
+              </div>
+              <button onClick={handleApprovePending} disabled={busy}>
+                {busy ? "Working…" : "Approve New Recommendation"}
+              </button>
+            </>
+          ) : (
+            <p className="empty-hint">No feasible alternative remains — pick an option below.</p>
+          )}
+        </div>
+      )}
+
       {loadingCandidates ? (
         <p className="empty-hint">Loading options…</p>
       ) : (
         <div className="candidate-list">
-          {candidates.map((c, i) => (
-            <div key={`${c.option}-${c.source}-${i}`} className={`candidate-card ${i === 0 ? "best" : ""}`}>
+          {feasible.map((c) => {
+            const key = candidateKey(c);
+            const isTop = key === topKey;
+            const isSelected = key === selectedKey;
+            const isOverriding = overridingKey === key;
+            return (
+              <div key={key} className={`candidate-card ${isTop ? "best" : ""} ${isSelected ? "selected" : ""}`}>
+                <div className="row">
+                  <span className="option-badge">
+                    {isSelected ? "✓ " : isTop ? "★ " : ""}
+                    {c.option}
+                  </span>
+                  <span>${c.cost.toFixed(0)}</span>
+                </div>
+                <div className="row">
+                  <span>
+                    {c.source}
+                    {c.flight_number ? ` · ${c.flight_number}` : ""}
+                  </span>
+                  <span>risk {((c.risk_score ?? 0) * 100).toFixed(0)}%</span>
+                </div>
+                <div className="row">
+                  <span>arrives {formatEta(c.eta)}</span>
+                </div>
+                <div className="detail">{c.detail}</div>
+                {isSelected && <div className="current-tag">current plan</div>}
+
+                {editable &&
+                  !isSelected &&
+                  !isOverriding &&
+                  (!plan && isTop ? (
+                    <button onClick={handleApproveTop} disabled={busy}>
+                      {busy ? "Working…" : "Approve"}
+                    </button>
+                  ) : (
+                    <button className="secondary" onClick={() => startOverride(c)} disabled={busy}>
+                      Choose this instead
+                    </button>
+                  ))}
+
+                {isOverriding && (
+                  <div className="override-form">
+                    <select
+                      value={overrideReason}
+                      onChange={(e) => setOverrideReason(e.target.value as OverrideReason)}
+                    >
+                      {OVERRIDE_REASONS.map((r) => (
+                        <option key={r} value={r}>
+                          {OVERRIDE_REASON_LABELS[r]}
+                        </option>
+                      ))}
+                    </select>
+                    {overrideReason === "other" && (
+                      <textarea
+                        placeholder="Say why…"
+                        value={overrideNote}
+                        onChange={(e) => setOverrideNote(e.target.value)}
+                      />
+                    )}
+                    <div className="override-actions">
+                      <button
+                        onClick={() => confirmOverride(c)}
+                        disabled={busy || (overrideReason === "other" && overrideNote.trim() === "")}
+                      >
+                        {busy ? "Working…" : "Confirm"}
+                      </button>
+                      <button className="secondary" onClick={cancelOverride} disabled={busy}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {disqualified.map((c) => (
+            <div key={`${candidateKey(c)}-dq`} className="candidate-card disqualified">
               <div className="row">
-                <span className="option-badge">
-                  {i === 0 ? "★ " : ""}
-                  {c.option}
-                </span>
+                <span className="option-badge">{c.option}</span>
                 <span>${c.cost.toFixed(0)}</span>
               </div>
               <div className="row">
@@ -86,22 +247,15 @@ export function PlanCard({
                   {c.source}
                   {c.flight_number ? ` · ${c.flight_number}` : ""}
                 </span>
-                <span>risk {(c.risk_score * 100).toFixed(0)}%</span>
               </div>
-              <div className="row">
-                <span>arrives {formatEta(c.eta)}</span>
-              </div>
-              <div className="detail">{c.detail}</div>
+              <div className="disqualified-reason">Disqualified: {c.disqualified_reason}</div>
             </div>
           ))}
-          {candidates.length === 0 && <p className="empty-hint">No feasible option before the deadline.</p>}
-        </div>
-      )}
 
-      {!plan && candidates.length > 0 && (
-        <button onClick={handlePropose} disabled={busy}>
-          {busy ? "Working…" : "Propose & Approve Plan"}
-        </button>
+          {feasible.length === 0 && disqualified.length === 0 && (
+            <p className="empty-hint">No options found for this part.</p>
+          )}
+        </div>
       )}
 
       {plan && (

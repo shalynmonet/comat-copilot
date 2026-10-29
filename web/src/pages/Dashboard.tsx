@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import type { Candidate, ExpiringPart, Flight, Plan, PlanEvent, Station } from "../api";
+import type { Candidate, ExpiringPart, Flight, OverrideReason, Plan, PlanEvent, Station } from "../api";
 import { StationMap } from "../components/StationMap";
 import { ExpiryQueue } from "../components/ExpiryQueue";
 import { PlanCard } from "../components/PlanCard";
@@ -24,6 +24,15 @@ export function Dashboard() {
     api.getFlights().then(setFlights).catch((e) => setError(String(e)));
   }, []);
 
+  const refreshCandidates = (serial: string) => {
+    setLoadingCandidates(true);
+    api
+      .getCandidates(serial)
+      .then(setCandidates)
+      .catch((e) => setError(String(e)))
+      .finally(() => setLoadingCandidates(false));
+  };
+
   useEffect(() => {
     if (!selectedPart) {
       setCandidates([]);
@@ -31,14 +40,9 @@ export function Dashboard() {
       setEvents([]);
       return;
     }
-    setLoadingCandidates(true);
     setPlan(null);
     setEvents([]);
-    api
-      .getCandidates(selectedPart.serial)
-      .then(setCandidates)
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoadingCandidates(false));
+    refreshCandidates(selectedPart.serial);
   }, [selectedPart]);
 
   useEffect(() => {
@@ -47,20 +51,53 @@ export function Dashboard() {
       return;
     }
     api.getEvents(plan.id).then(setEvents).catch((e) => setError(String(e)));
-  }, [plan?.id, plan?.status, plan?.reason]);
+  }, [plan?.id, plan?.status, plan?.reason, plan?.pending_option]);
 
   const handleSelectPart = (part: ExpiringPart) => {
     setError(null);
     setSelectedPart(part);
   };
 
-  const handleProposeAndApprove = async () => {
+  const handleApproveTop = async () => {
     if (!selectedPart) return;
     setError(null);
     try {
       const created = await api.createPlan(selectedPart.serial);
       const approved = await api.approvePlan(created.id);
       setPlan(approved);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const handleChooseAlternative = async (candidate: Candidate, reason: OverrideReason, note: string) => {
+    if (!selectedPart) return;
+    setError(null);
+    try {
+      let planId = plan?.id;
+      if (!planId) {
+        const created = await api.createPlan(selectedPart.serial);
+        planId = created.id;
+      }
+      const result = await api.chooseAlternative(planId, {
+        option: candidate.option,
+        source: candidate.source,
+        flight_number: candidate.flight_number,
+        reason,
+        note: note.trim() || undefined,
+      });
+      setPlan(result);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const handleApprovePending = async () => {
+    if (!plan) return;
+    setError(null);
+    try {
+      const result = await api.approvePlan(plan.id);
+      setPlan(result);
     } catch (e) {
       setError(String(e));
     }
@@ -79,6 +116,7 @@ export function Dashboard() {
       const updated = result.replanned_plans.find((p) => p.id === plan.id);
       if (updated) setPlan(updated);
       api.getFlights().then(setFlights);
+      if (selectedPart) refreshCandidates(selectedPart.serial);
     } catch (e) {
       setError(String(e));
     }
@@ -104,7 +142,9 @@ export function Dashboard() {
           loadingCandidates={loadingCandidates}
           plan={plan}
           canDelay={canDelay}
-          onProposeAndApprove={handleProposeAndApprove}
+          onApproveTop={handleApproveTop}
+          onChooseAlternative={handleChooseAlternative}
+          onApprovePending={handleApprovePending}
           onSimulateDelay={handleSimulateDelay}
           error={error}
         />

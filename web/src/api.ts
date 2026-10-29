@@ -36,10 +36,21 @@ export interface Candidate {
   flight_number: string | null;
   cost: number;
   eta: string;
-  risk_score: number;
-  score: number;
+  risk_score: number | null;
+  score: number | null;
   detail: string;
+  disqualified: boolean;
+  disqualified_reason: string | null;
 }
+
+export type OverrideReason = "flight_usually_full" | "preferred_vendor" | "spare_needed_elsewhere" | "other";
+
+export const OVERRIDE_REASON_LABELS: Record<OverrideReason, string> = {
+  flight_usually_full: "Flight usually full",
+  preferred_vendor: "Preferred vendor",
+  spare_needed_elsewhere: "Spare needed elsewhere",
+  other: "Other",
+};
 
 export interface Plan {
   id: number;
@@ -51,6 +62,12 @@ export interface Plan {
   risk_score: number;
   status: PlanStatus;
   reason: string | null;
+  pending_option: PlanOption | null;
+  pending_source: string | null;
+  pending_flight_number: string | null;
+  pending_cost: number | null;
+  pending_risk_score: number | null;
+  pending_reason: string | null;
 }
 
 export interface Flight {
@@ -68,7 +85,7 @@ export interface Flight {
 export interface PlanEvent {
   id: number;
   plan_id: number;
-  event_type: "created" | "re-routed" | "approved" | "shipped" | "installed";
+  event_type: "created" | "re-routed" | "approved" | "overridden" | "shipped" | "installed";
   created_at: string;
   detail: string | null;
 }
@@ -93,6 +110,10 @@ export const api = {
   createPlan: (installedSerial: string) =>
     request<Plan>("/plans", { method: "POST", body: JSON.stringify({ installed_serial: installedSerial }) }),
   approvePlan: (id: number) => request<Plan>(`/plans/${id}/approve`, { method: "POST" }),
+  chooseAlternative: (
+    id: number,
+    body: { option: PlanOption; source: string; flight_number: string | null; reason: OverrideReason; note?: string },
+  ) => request<Plan>(`/plans/${id}/choose`, { method: "POST", body: JSON.stringify(body) }),
   getPlan: (id: number) => request<Plan>(`/plans/${id}`),
   getFlights: () => request<Flight[]>("/flights"),
   delayFlight: (id: number, minutes: number) =>
