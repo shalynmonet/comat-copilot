@@ -13,5 +13,8 @@ web/tsconfig.tsbuildinfo
 # Env
 .env
 
+# Private config (real internal codes) -- see api/config/private_codes.example.yaml
+api/config/private_codes.yaml
+
 # OS
 .DS_Store

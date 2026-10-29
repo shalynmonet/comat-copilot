@@ -1,0 +1,32 @@
+# Copy this file to private_codes.yaml and fill in the real internal
+# values before a pilot. private_codes.yaml is gitignored -- real codes
+# never reach the repo. This example ships with placeholder values so
+# the app runs correctly out of the box on a fresh clone.
+
+commodity_profiles:
+  # Generic names are what the code uses (app/models.py's
+  # CommodityProfile enum, the planner, the UI). Only the route and
+  # handling codes below are specific to the real cargo system.
+  critical_planeside:
+    handoff_route: plane_side
+    handling_codes: [AOG, EZP]
+    # codes in here are appended when the shipment is saved, not when
+    # the plan is first created -- EZP is added at save time
+    codes_added_on_save: [EZP]
+  critical_cargo:
+    handoff_route: to_cargo
+    handling_codes: [AOG]
+  low_cargo:
+    handoff_route: to_cargo
+    handling_codes: [MRX]
+
+# A part at or above this weight is "oversize" for routing purposes.
+oversize_weight_threshold_lb: 150
+
+# Placeholder risk that an STD shipment gets bumped for lack of space.
+# Used in scoring until there's a real historical bump rate to swap in.
+std_bump_risk: 0.10
+
+booking_cutoffs_minutes:
+  domestic: 60
+  international: 90
