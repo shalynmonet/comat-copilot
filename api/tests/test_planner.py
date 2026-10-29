@@ -39,6 +39,29 @@ def test_best_candidate_is_the_comat_flight(session, hero_part):
     assert best.candidate.source == "DFW"
 
 
+def test_default_candidates_are_all_feasible(session, hero_part):
+    candidates = build_candidates(session, hero_part, now=NOW)
+    assert candidates  # sanity: the hero case has feasible options at all
+    assert not any(c.disqualified for c in candidates)
+
+
+def test_disqualified_candidates_surface_with_reasons_when_requested(session, hero_part):
+    candidates = build_candidates(session, hero_part, now=NOW, include_disqualified=True)
+
+    ord_transfer = next(c for c in candidates if c.source == "ORD" and c.option == PlanOption.transfer)
+    assert ord_transfer.disqualified
+    assert "unserviceable" in ord_transfer.disqualified_reason
+
+    slow_vendor = next(c for c in candidates if c.source == "SkyParts Direct")
+    assert slow_vendor.disqualified
+    assert "deadline" in slow_vendor.disqualified_reason
+
+    # the winning COMAT option is still present and NOT flagged disqualified
+    comat = next(c for c in candidates if c.option == PlanOption.comat and c.source == "DFW")
+    assert not comat.disqualified
+    assert comat.disqualified_reason is None
+
+
 def test_risk_of_slack_bounds():
     assert risk_of_slack(48) == 0.0
     assert risk_of_slack(0) == 1.0

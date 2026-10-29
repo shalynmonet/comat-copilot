@@ -1,7 +1,10 @@
-"""Covers re-planning on a flight delay: a small delay leaves an
-already-approved plan untouched, a bigger one reroutes it to the ground
-transfer, the switch is logged as a plan event, and plans that are no
-longer "active" (shipped, cancelled) are left alone.
+"""Covers re-planning on a flight delay.
+
+A plan that was never approved keeps the old behavior: the system just
+recalculates and updates it directly. A plan a human already *approved* is
+handled more carefully -- the flight change flags it at_risk and stages the
+new recommendation in pending_* rather than silently rewriting the
+committed option, requiring a fresh approval (covered in test_decisions.py).
 """
 
 from datetime import timedelta
@@ -15,10 +18,10 @@ from app.planner.replan import replan_for_flight
 from tests.conftest import DEADLINE, NOW
 
 
-def _approve_hero_plan(session, hero_part) -> Plan:
+def _hero_plan(session, hero_part, status: PlanStatus) -> Plan:
     candidates = build_candidates(session, hero_part, now=NOW)
     best = pick_best(candidates, deadline=DEADLINE)
-    plan = to_plan(hero_part.serial, best, status=PlanStatus.approved)
+    plan = to_plan(hero_part.serial, best, status=status)
     session.add(plan)
     session.commit()
     session.refresh(plan)
@@ -29,55 +32,74 @@ def _get_hero_flight(session) -> Flight:
     return session.exec(select(Flight).where(Flight.flight_number == "EV2301")).one()
 
 
-def test_small_delay_leaves_a_comfortable_plan_untouched(session, hero_part):
-    plan = _approve_hero_plan(session, hero_part)
+def _delay_hero_flight(session, hours: int) -> Flight:
     flight = _get_hero_flight(session)
-
     flight.status = FlightStatus.delayed
-    flight.sched_dep += timedelta(hours=3)
-    flight.sched_arr += timedelta(hours=3)
+    flight.sched_dep += timedelta(hours=hours)
+    flight.sched_arr += timedelta(hours=hours)
     session.add(flight)
     session.commit()
     session.refresh(flight)
+    return flight
+
+
+def test_proposed_plan_still_auto_updates_on_a_big_delay(session, hero_part):
+    plan = _hero_plan(session, hero_part, PlanStatus.proposed)
+    flight = _delay_hero_flight(session, 10)
 
     touched = replan_for_flight(session, flight, now=NOW)
 
     assert len(touched) == 1
-    assert touched[0].id == plan.id
-    assert touched[0].option == PlanOption.comat
-    assert touched[0].flight_number == "EV2301"
-    assert touched[0].status == PlanStatus.approved  # unchanged
+    updated = touched[0]
+    assert updated.id == plan.id
+    assert updated.option == PlanOption.transfer
+    assert updated.flight_number is None
+    assert updated.status == PlanStatus.re_routed
+    assert updated.pending_option is None  # no approval gate for an unapproved plan
 
 
-def test_big_delay_reroutes_to_ground_transfer(session, hero_part):
-    plan = _approve_hero_plan(session, hero_part)
-    flight = _get_hero_flight(session)
-
-    flight.status = FlightStatus.delayed
-    flight.sched_dep += timedelta(hours=10)
-    flight.sched_arr += timedelta(hours=10)
-    session.add(flight)
-    session.commit()
-    session.refresh(flight)
+def test_small_delay_on_approved_plan_flags_at_risk_without_changing_the_committed_option(session, hero_part):
+    plan = _hero_plan(session, hero_part, PlanStatus.approved)
+    flight = _delay_hero_flight(session, 3)
 
     touched = replan_for_flight(session, flight, now=NOW)
 
     assert len(touched) == 1
-    rerouted = touched[0]
-    assert rerouted.id == plan.id
-    assert rerouted.option == PlanOption.transfer
-    assert rerouted.flight_number is None
-    assert rerouted.source == "DFW"
-    assert rerouted.status == PlanStatus.re_routed
+    result = touched[0]
+    assert result.id == plan.id
+    assert result.status == PlanStatus.at_risk
+    # the committed option is untouched -- still what the human approved
+    assert result.option == PlanOption.comat
+    assert result.flight_number == "EV2301"
+    # the (possibly-unchanged) recommendation is staged, not applied
+    assert result.pending_option == PlanOption.comat
+    assert result.pending_source == "DFW"
+    assert result.pending_flight_number == "EV2301"
+
+
+def test_big_delay_on_approved_plan_stages_transfer_without_applying_it(session, hero_part):
+    plan = _hero_plan(session, hero_part, PlanStatus.approved)
+    flight = _delay_hero_flight(session, 10)
+
+    touched = replan_for_flight(session, flight, now=NOW)
+
+    assert len(touched) == 1
+    result = touched[0]
+    assert result.id == plan.id
+    assert result.status == PlanStatus.at_risk
+    # still the stale, originally-approved COMAT option -- not silently switched
+    assert result.option == PlanOption.comat
+    assert result.flight_number == "EV2301"
+    # the new recommendation is staged for approval, not applied
+    assert result.pending_option == PlanOption.transfer
+    assert result.pending_source == "DFW"
+    assert result.pending_flight_number is None
+    assert result.pending_reason
 
 
 def test_reroute_is_logged_as_a_plan_event(session, hero_part):
-    plan = _approve_hero_plan(session, hero_part)
-    flight = _get_hero_flight(session)
-    flight.sched_arr += timedelta(hours=10)
-    session.add(flight)
-    session.commit()
-    session.refresh(flight)
+    plan = _hero_plan(session, hero_part, PlanStatus.approved)
+    flight = _delay_hero_flight(session, 10)
 
     replan_for_flight(session, flight, now=NOW)
 
@@ -88,16 +110,12 @@ def test_reroute_is_logged_as_a_plan_event(session, hero_part):
 
 
 def test_shipped_plans_are_not_replanned(session, hero_part):
-    plan = _approve_hero_plan(session, hero_part)
+    plan = _hero_plan(session, hero_part, PlanStatus.approved)
     plan.status = PlanStatus.shipped
     session.add(plan)
     session.commit()
 
-    flight = _get_hero_flight(session)
-    flight.sched_arr += timedelta(hours=10)
-    session.add(flight)
-    session.commit()
-    session.refresh(flight)
+    flight = _delay_hero_flight(session, 10)
 
     touched = replan_for_flight(session, flight, now=NOW)
 

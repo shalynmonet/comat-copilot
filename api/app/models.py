@@ -41,8 +41,24 @@ class PlanEventType(str, Enum):
     created = "created"
     re_routed = "re-routed"
     approved = "approved"
+    overridden = "overridden"
     shipped = "shipped"
     installed = "installed"
+
+
+class OverrideReason(str, Enum):
+    flight_usually_full = "flight_usually_full"
+    preferred_vendor = "preferred_vendor"
+    spare_needed_elsewhere = "spare_needed_elsewhere"
+    other = "other"
+
+
+OVERRIDE_REASON_LABELS = {
+    OverrideReason.flight_usually_full: "that flight usually runs full",
+    OverrideReason.preferred_vendor: "preferred vendor",
+    OverrideReason.spare_needed_elsewhere: "spare needed elsewhere",
+    OverrideReason.other: "other",
+}
 
 
 class Station(SQLModel, table=True):
@@ -121,6 +137,17 @@ class Plan(SQLModel, table=True):
     risk_score: float
     status: PlanStatus = PlanStatus.proposed
     reason: Optional[str] = None
+
+    # Set when a flight change puts an already-*approved* plan at risk: the
+    # system's new recommendation waits here rather than silently overwriting
+    # the committed option, since a human already signed off on that one.
+    # POST /plans/{id}/approve applies these (and clears them) when present.
+    pending_option: Optional[PlanOption] = None
+    pending_source: Optional[str] = None
+    pending_flight_number: Optional[str] = None
+    pending_cost: Optional[float] = None
+    pending_risk_score: Optional[float] = None
+    pending_reason: Optional[str] = None
 
 
 class PlanEvent(SQLModel, table=True):

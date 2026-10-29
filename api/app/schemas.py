@@ -5,7 +5,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from app.models import PlanOption
+from app.models import OverrideReason, PlanOption
 
 
 class ExpiringPartOut(BaseModel):
@@ -25,9 +25,11 @@ class CandidateOut(BaseModel):
     flight_number: Optional[str]
     cost: float
     eta: datetime
-    risk_score: float
-    score: float
+    risk_score: Optional[float]
+    score: Optional[float]
     detail: str
+    disqualified: bool = False
+    disqualified_reason: Optional[str] = None
 
 
 class PlanCreateRequest(BaseModel):
@@ -36,3 +38,14 @@ class PlanCreateRequest(BaseModel):
 
 class DelayRequest(BaseModel):
     minutes: int = 180
+
+
+class ChoosePlanRequest(BaseModel):
+    """The body for POST /plans/{id}/choose -- a human picking a feasible
+    candidate other than the system's top recommendation, and saying why."""
+
+    option: PlanOption
+    source: str
+    flight_number: Optional[str] = None
+    reason: OverrideReason
+    note: Optional[str] = None
