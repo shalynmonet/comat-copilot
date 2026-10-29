@@ -3,6 +3,7 @@ ANTHROPIC_API_KEY (or on any API error) this falls back to the planner's own
 templated detail string, so the rest of the app works with zero setup.
 """
 
+import logging
 import os
 from datetime import date
 from typing import Optional
@@ -10,8 +11,14 @@ from typing import Optional
 from app.planner.candidates import Candidate
 from app.planner.score import ScoredCandidate
 
+logger = logging.getLogger(__name__)
+
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-5-5")
-MAX_TOKENS = 100
+# Generous headroom: this model's response can carry formatting/reasoning
+# overhead before any visible text, so a tight budget risks stop_reason
+# "max_tokens" with zero text produced -- the one-sentence output itself
+# is short, but the budget needs room for whatever precedes it.
+MAX_TOKENS = 500
 
 _client = None
 _client_checked = False
@@ -25,12 +32,15 @@ def _get_client():
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
+        logger.info("ANTHROPIC_API_KEY not set; using templated reason lines")
         return None
     try:
         from anthropic import Anthropic
 
         _client = Anthropic(api_key=api_key)
+        logger.info("Anthropic client configured (key length=%d)", len(api_key))
     except Exception:
+        logger.exception("Failed to construct Anthropic client; using templated reason lines")
         _client = None
     return _client
 
@@ -77,7 +87,17 @@ def explain_plan(
             max_tokens=MAX_TOKENS,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = response.content[0].text.strip()
-        return text or fallback
+        # content[0] isn't guaranteed to be the text block (e.g. a leading
+        # thinking block), so scan for the first block that actually has text.
+        text = next((block.text for block in response.content if getattr(block, "text", None)), None)
+        if not text:
+            logger.warning(
+                "Claude response had no text block (stop_reason=%s, block types=%s); using templated reason line",
+                getattr(response, "stop_reason", None),
+                [type(b).__name__ for b in response.content],
+            )
+            return fallback
+        return text.strip()
     except Exception:
+        logger.exception("Claude reason-line call failed; using templated reason line")
         return fallback
