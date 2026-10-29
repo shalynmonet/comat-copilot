@@ -9,6 +9,7 @@ from app.db import get_session
 from app.models import Aircraft, InstalledPart, Part, Plan, PlanEvent, PlanEventType, PlanStatus
 from app.planner.candidates import build_candidates, deadline_for
 from app.planner.decisions import NoSuchCandidate, approve_plan, choose_alternative
+from app.planner.intake import link_request_to_plan
 from app.planner.score import rank_candidates, to_plan
 from app.schemas import CandidateOut, ChoosePlanRequest, PlanCreateRequest
 
@@ -102,6 +103,7 @@ def create_plan(body: PlanCreateRequest):
                 detail=plan.reason,
             )
         )
+        link_request_to_plan(session, installed.serial, plan.id)
         session.commit()
         session.refresh(plan)
         return plan
