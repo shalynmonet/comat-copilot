@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { FieldSpec, ShipmentDraft } from "../api";
+import { api } from "../api";
 
 interface Props {
   drafts: ShipmentDraft[];
@@ -17,18 +18,6 @@ function formatValue(value: unknown): string {
 
 function draftLines(draft: ShipmentDraft, specs: FieldSpec[]): string[] {
   return specs.map((spec) => `${spec.label}: ${formatValue(draft.fields[spec.name])}`);
-}
-
-function downloadCsv(draft: ShipmentDraft, specs: FieldSpec[]) {
-  const header = specs.map((s) => s.label).join(",");
-  const row = specs.map((s) => `"${formatValue(draft.fields[s.name]).replace(/"/g, '""')}"`).join(",");
-  const blob = new Blob([`${header}\n${row}\n`], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `shipment-draft-${draft.id}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
 }
 
 export function ShipmentDraftPanel({ drafts, fieldSpecs, onSubmit, error }: Props) {
@@ -93,7 +82,7 @@ export function ShipmentDraftPanel({ drafts, fieldSpecs, onSubmit, error }: Prop
           <button className="secondary" onClick={handleCopy}>
             {copied ? "Copied!" : "Copy to SAFE"}
           </button>
-          <button className="secondary" onClick={() => downloadCsv(current, fieldSpecs)}>
+          <button className="secondary" onClick={() => window.open(api.exportShipmentUrl(current.id, "csv"), "_blank")}>
             Export CSV
           </button>
           {current.status === "ready" && (
@@ -103,6 +92,9 @@ export function ShipmentDraftPanel({ drafts, fieldSpecs, onSubmit, error }: Prop
           )}
           {current.status === "submitted" && <span className="current-tag">submitted to SAFE/iCargo</span>}
           {current.status === "draft" && <span className="empty-hint">fill in missing fields before submitting</span>}
+          {current.status === "superseded" && (
+            <span className="empty-hint">superseded — approve the new recommendation to build a fresh draft</span>
+          )}
         </div>
       </div>
 

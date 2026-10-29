@@ -26,7 +26,7 @@ def get_flight(flight_id: int):
         return flight
 
 
-@router.post("/{flight_id}/delay")
+@router.post("/{flight_id}/simulate-delay")
 def simulate_delay(flight_id: int, body: DelayRequest = DelayRequest()):
     with get_session() as session:
         flight = session.get(Flight, flight_id)

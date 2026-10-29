@@ -127,6 +127,22 @@ export interface FieldSpec {
   required: boolean;
 }
 
+export type RaisedBy = "maintenance_control" | "stores" | "copilot";
+export type ShippingRequestStatus = "open" | "planned" | "drafted" | "submitted" | "fulfilled" | "cancelled";
+
+export interface ShippingRequest {
+  id: number;
+  part_number: string;
+  serial: string;
+  station_needed: string;
+  needed_by: string;
+  priority: Priority;
+  raised_by: RaisedBy;
+  status: ShippingRequestStatus;
+  plan_id: number | null;
+  shipment_draft_id: number | null;
+}
+
 export interface Flight {
   id: number;
   flight_number: string;
@@ -174,7 +190,7 @@ export const api = {
   getPlan: (id: number) => request<Plan>(`/plans/${id}`),
   getFlights: () => request<Flight[]>("/flights"),
   delayFlight: (id: number, minutes: number) =>
-    request<{ flight: Flight; replanned_plans: Plan[] }>(`/flights/${id}/delay`, {
+    request<{ flight: Flight; replanned_plans: Plan[] }>(`/flights/${id}/simulate-delay`, {
       method: "POST",
       body: JSON.stringify({ minutes }),
     }),
@@ -183,4 +199,7 @@ export const api = {
   getShipments: (planId?: number) => request<ShipmentDraft[]>(`/shipments${planId ? `?plan_id=${planId}` : ""}`),
   submitShipment: (id: number) =>
     request<{ plan: Plan; draft: ShipmentDraft }>(`/shipments/${id}/submitted`, { method: "POST" }),
+  exportShipmentUrl: (id: number, format: "json" | "csv") => `${API_URL}/shipments/${id}/export?format=${format}`,
+  getRequests: (status?: ShippingRequestStatus) =>
+    request<ShippingRequest[]>(`/requests${status ? `?status=${status}` : ""}`),
 };

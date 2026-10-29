@@ -1,6 +1,9 @@
-from typing import Optional
+import csv
+import io
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from sqlmodel import select
 
 from app.adapters.safe_adapter import load_field_specs
@@ -10,6 +13,14 @@ from app.planner.shipment_chain import DraftNotReady, NoDraftToSubmit, submit_sh
 from app.schemas import FieldSpecOut
 
 router = APIRouter(prefix="/shipments", tags=["shipments"])
+
+
+def _csv_value(value: object) -> str:
+    if value is None or value == "" or value == []:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    return str(value)
 
 
 @router.get("/field-specs", response_model=list[FieldSpecOut])
@@ -33,6 +44,28 @@ def get_shipment(draft_id: int):
         if not draft:
             raise HTTPException(404, f"shipment draft {draft_id} not found")
         return draft
+
+
+@router.get("/{draft_id}/export")
+def export_shipment(draft_id: int, format: Literal["json", "csv"] = "json"):
+    with get_session() as session:
+        draft = session.get(ShipmentDraft, draft_id)
+        if not draft:
+            raise HTTPException(404, f"shipment draft {draft_id} not found")
+
+        if format == "json":
+            return draft
+
+        specs = load_field_specs()
+        buffer = io.StringIO()
+        writer = csv.writer(buffer)
+        writer.writerow([spec.label for spec in specs])
+        writer.writerow([_csv_value(draft.fields.get(spec.name)) for spec in specs])
+        return Response(
+            content=buffer.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="shipment-draft-{draft_id}.csv"'},
+        )
 
 
 @router.post("/{draft_id}/submitted")
