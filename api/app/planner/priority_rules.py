@@ -15,17 +15,24 @@ pilot's real codes live.
 assign_priority_profile_route() is the integration point: it populates
 these fields directly on a Plan, right before a SAFE draft is built from
 it (see app/adapters/safe_adapter.py and app/planner/decisions.py).
+compute_priority_assignment() is the same computation without needing a
+real Plan -- replan.py uses it to describe what a *pending* recommendation
+would be (priority included) before anyone has approved it.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, time
+from typing import Optional
 
 from sqlmodel import Session, select
 
 from app.config import load_private_codes
 from app.models import Aircraft, CommodityProfile, Flight, HandoffRoute, InstalledPart, Part, Plan, PlanOption, Priority
 from app.planner.flight_search import search_flight_options
+
+PRIORITY_RANK = {Priority.std: 0, Priority.mrx: 0, Priority.mrd: 1, Priority.aog: 2}
 
 PRIORITY_LABELS = {
     Priority.aog: "AOG",
@@ -133,35 +140,76 @@ def build_reason_line(priority: Priority, route: HandoffRoute, why: str) -> str:
     return f"{ROUTE_LABELS[route]}: {PRIORITY_LABELS[priority]} {why}."
 
 
-def assign_priority_profile_route(session: Session, plan: Plan, now: datetime) -> None:
-    """Computes priority/commodity_profile/handoff_route/handling_codes
-    for whatever option is currently on `plan` and sets them directly.
-    Only COMAT plans get a flight-backup-based priority (that's the only
-    option with "flights" to count); transfer/buy default to STD, since
-    neither has a backup-flight concept, unless the part has expired.
+@dataclass
+class PriorityAssignment:
+    priority: Priority
+    commodity_profile: CommodityProfile
+    handoff_route: HandoffRoute
+    handling_codes: list[str]
+    viable_flight_count: int
+    part_expired: bool
+
+
+def compute_priority_assignment(
+    session: Session,
+    installed: InstalledPart,
+    part: Part,
+    option: PlanOption,
+    source: Optional[str],
+    flight_number: Optional[str],
+    is_ron_package: bool,
+    now: datetime,
+) -> PriorityAssignment:
+    """The pure version of assign_priority_profile_route(): takes the
+    option/source/flight_number explicitly instead of reading them off a
+    Plan, so it can describe a *candidate* recommendation -- not yet
+    committed to any Plan -- just as well as a real one. Only COMAT gets
+    a flight-backup-based priority (that's the only option with
+    "flights" to count); transfer/buy default to STD unless the part has
+    expired.
     """
-    installed = session.get(InstalledPart, plan.installed_serial)
-    part = session.get(Part, installed.part_number)
     part_expired = installed.expires_on < now.date()
 
     is_international = False
-    if plan.option == PlanOption.comat and plan.flight_number:
+    viable_flight_count = 0
+    if option == PlanOption.comat and flight_number:
         aircraft = session.get(Aircraft, installed.tail_number)
         deadline = datetime.combine(installed.expires_on, time.min)
-        viable = search_flight_options(session, plan.source, aircraft.overnight_station, part, now, deadline)
-        priority = compute_priority(len(viable), part_expired)
+        viable = search_flight_options(session, source, aircraft.overnight_station, part, now, deadline)
+        viable_flight_count = len(viable)
+        priority = compute_priority(viable_flight_count, part_expired)
 
-        flight = session.exec(select(Flight).where(Flight.flight_number == plan.flight_number)).first()
+        flight = session.exec(select(Flight).where(Flight.flight_number == flight_number)).first()
         is_international = bool(flight and flight.is_international)
     else:
         priority = Priority.aog if part_expired else Priority.std
 
     oversize = is_effectively_oversize(is_oversize=part.is_oversize, weight_lb=part.weight_lb)
     profile, route = compute_profile_and_route(
-        priority, is_oversize=oversize, is_international=is_international, is_ron_package=plan.is_ron_package
+        priority, is_oversize=oversize, is_international=is_international, is_ron_package=is_ron_package
     )
 
-    plan.priority = priority
-    plan.commodity_profile = profile
-    plan.handoff_route = route
-    plan.handling_codes = handling_codes_at_creation(profile)
+    return PriorityAssignment(
+        priority=priority,
+        commodity_profile=profile,
+        handoff_route=route,
+        handling_codes=handling_codes_at_creation(profile),
+        viable_flight_count=viable_flight_count,
+        part_expired=part_expired,
+    )
+
+
+def assign_priority_profile_route(session: Session, plan: Plan, now: datetime) -> PriorityAssignment:
+    """Computes priority/commodity_profile/handoff_route/handling_codes
+    for whatever option is currently on `plan` and sets them directly."""
+    installed = session.get(InstalledPart, plan.installed_serial)
+    part = session.get(Part, installed.part_number)
+    assignment = compute_priority_assignment(
+        session, installed, part, plan.option, plan.source, plan.flight_number, plan.is_ron_package, now
+    )
+
+    plan.priority = assignment.priority
+    plan.commodity_profile = assignment.commodity_profile
+    plan.handoff_route = assignment.handoff_route
+    plan.handling_codes = assignment.handling_codes
+    return assignment
