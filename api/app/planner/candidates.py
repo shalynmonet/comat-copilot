@@ -28,6 +28,7 @@ from app.models import (
     Station,
     VendorQuote,
 )
+from app.planner.flight_search import search_flight_options
 
 COMAT_HANDLING_FEE = 25.0
 
@@ -106,6 +107,40 @@ def _comat_candidates(
                     detail=f"ride flight {flight.flight_number} from {spare.station}, arrives {flight.sched_arr:%H:%M}",
                     disqualified=reason is not None,
                     disqualified_reason=reason,
+                    is_dangerous_goods=part.is_dangerous_goods,
+                )
+            )
+    return candidates
+
+
+def _comat_connection_candidates(
+    session: Session, part: Part, destination: str, now: datetime, deadline: datetime
+) -> list[Candidate]:
+    """One-stop connections through a hub (see flight_search.py) for a
+    serviceable spare with no direct flight to the destination. Only
+    bookable, on-time connections come back from search_flight_options,
+    so these are never shown disqualified -- the direct-flight loop
+    above already covers a spare's disqualified reasons (unserviceable,
+    no DG-accepting flight, etc.) wherever a direct flight exists."""
+    candidates = []
+    for spare in _spares(session, part.part_number, destination):
+        if spare.condition != InventoryCondition.serviceable:
+            continue
+        for option in search_flight_options(session, spare.station, destination, part, now, deadline):
+            if not option.is_connection:
+                continue  # direct options are already covered above
+            leg_numbers = [leg.flight.flight_number for leg in option.legs]
+            candidates.append(
+                Candidate(
+                    option=PlanOption.comat,
+                    source=spare.station,
+                    flight_number="/".join(leg_numbers),
+                    cost=COMAT_HANDLING_FEE,
+                    eta=option.arrival,
+                    detail=(
+                        f"ride {' then '.join(leg_numbers)} from {spare.station} via {option.hub}, "
+                        f"arrives {option.arrival:%H:%M}"
+                    ),
                     is_dangerous_goods=part.is_dangerous_goods,
                 )
             )
@@ -195,6 +230,7 @@ def build_candidates(
 
     candidates = (
         _comat_candidates(session, part, destination, now, deadline)
+        + _comat_connection_candidates(session, part, destination, now, deadline)
         + _transfer_candidates(session, part, destination, now, deadline)
         + _buy_candidates(session, part, destination, now, deadline)
     )

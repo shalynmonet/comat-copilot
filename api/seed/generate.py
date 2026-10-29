@@ -25,9 +25,14 @@ from app.models import (
     InventoryCondition,
     InventoryItem,
     Part,
+    Priority,
+    RaisedBy,
+    ShippingRequest,
+    ShippingRequestStatus,
     Station,
     VendorQuote,
 )
+from app.planner.intake import raise_copilot_requests
 
 FLEET_PATH = Path(__file__).parent / "fleet.json"
 SEED = 42
@@ -49,13 +54,47 @@ DECOY_VENDOR = "SkyParts Direct"
 DECOY_VENDOR_PRICE = 610.0
 DECOY_VENDOR_LEAD_HRS = 60.0  # deadline is 48 hrs out; this misses it
 
+# DG decoy: a second, serviceable OXY-BTL-02 spare at ORD -- reachable only
+# by DG_DECOY_TAIL's ORD -> CVG flight, which is the one flight in the
+# fleet deliberately not DG-approved. Shows up as a feasible-looking
+# candidate that's disqualified specifically for the DG restriction,
+# alongside the already-serviceable DFW spare that *does* ride DG.
+DG_DECOY_TAIL = "N516EV"
+
+# Connection scenario: a second expiring part on the hero's own tail,
+# whose only spare is at TUL -- no direct TUL -> CVG flight exists, so
+# the planner has to find it via the TUL -> DFW -> CVG connection
+# (CONNECTION_HUB_TAIL's leg into DFW, then the hero's own EV2301 onward).
+CONNECTION_PART = "HYD-PUMP-B"
+CONNECTION_STATION = "TUL"
+CONNECTION_DAYS_TO_EXPIRY = 3
+CONNECTION_HUB_TAIL = "N511EV"
+CONNECTION_FLIGHT_NUMBER = "EV2250"
+
+# Oversize scenario: a critical (short-fused) part that's also oversize,
+# so it must be routed critical_cargo rather than critical_planeside.
+OVERSIZE_PART = "TIRE-MAIN"
+OVERSIZE_STATION = "OKC"
+OVERSIZE_DAYS_TO_EXPIRY = 1
+OVERSIZE_TAIL = "N513EV"
+
+# A real AOG: already past its expiry, raised directly by maintenance
+# control (not Copilot's scan) -- the kind of firefighting Copilot's
+# early warning is meant to prevent more of.
+AOG_TAIL = "N502EV"
+AOG_PART = "APU-BATT"
+AOG_DAYS_TO_EXPIRY = -1
+
 # A few more parts forced into the 7-day expiry window, on other tails, so
-# the queue has 5-6 entries total (hero + these) instead of just one.
+# the queue has several entries total (hero + these) instead of just one.
 NEAR_EXPIRY_OVERRIDES = [
     ("N503EV", "ELT-BATT-406", 1),
     ("N508EV", "FIRE-EXT-HALON", 4),
     ("N512EV", "LIFE-VEST-ADULT", 6),
     ("N516EV", "EMK-DOC", 7),
+    ("N501EV", CONNECTION_PART, CONNECTION_DAYS_TO_EXPIRY),
+    (OVERSIZE_TAIL, OVERSIZE_PART, OVERSIZE_DAYS_TO_EXPIRY),
+    (AOG_TAIL, AOG_PART, AOG_DAYS_TO_EXPIRY),
 ]
 
 CARGO_CAPACITY_LB = {"E175": 2500.0, "CRJ900": 2200.0}
@@ -105,10 +144,11 @@ def seed_installed_parts(session, fleet: dict, parts_by_number: dict, rng: rando
         if tail == HERO_TAIL:
             _add_installed_part(session, tail, HERO_PART, parts_by_number, HERO_DAYS_TO_EXPIRY)
             assigned.add(HERO_PART)
-        elif tail in override_by_tail:
+        if tail in override_by_tail:
             part_no, days = override_by_tail[tail]
-            _add_installed_part(session, tail, part_no, parts_by_number, days)
-            assigned.add(part_no)
+            if part_no not in assigned:
+                _add_installed_part(session, tail, part_no, parts_by_number, days)
+                assigned.add(part_no)
 
         # Fill remaining slots (every tail carries 2 tracked parts) with
         # expiry dates well outside the 7-day window.
@@ -161,6 +201,44 @@ def seed_inventory(session, fleet: dict, parts_by_number: dict, rng: random.Rand
             last_counted_on=TODAY - timedelta(days=2),
         )
     )
+    # DG decoy: a second, serviceable ORD spare -- reachable only by the
+    # one flight in the fleet that doesn't accept dangerous goods.
+    session.add(
+        InventoryItem(
+            serial=f"INV-{DECOY_UNSERVICEABLE_STATION}-{HERO_PART}-2",
+            part_number=HERO_PART,
+            station=DECOY_UNSERVICEABLE_STATION,
+            condition=InventoryCondition.serviceable,
+            expires_on=TODAY + timedelta(days=400),
+            last_counted_on=TODAY - timedelta(days=1),
+        )
+    )
+    # Connection scenario: the only spare is at TUL, with no direct
+    # flight to CVG -- COMAT only works here via the TUL -> DFW -> CVG
+    # connection.
+    session.add(
+        InventoryItem(
+            serial=f"INV-{CONNECTION_STATION}-{CONNECTION_PART}-1",
+            part_number=CONNECTION_PART,
+            station=CONNECTION_STATION,
+            condition=InventoryCondition.serviceable,
+            expires_on=TODAY + timedelta(days=400),
+            last_counted_on=TODAY - timedelta(days=1),
+        )
+    )
+    # Oversize scenario: a serviceable spare at the aircraft's own
+    # current station, so COMAT rides that aircraft's own repositioning
+    # flight.
+    session.add(
+        InventoryItem(
+            serial=f"INV-{OVERSIZE_STATION}-{OVERSIZE_PART}-1",
+            part_number=OVERSIZE_PART,
+            station=OVERSIZE_STATION,
+            condition=InventoryCondition.serviceable,
+            expires_on=TODAY + timedelta(days=400),
+            last_counted_on=TODAY - timedelta(days=1),
+        )
+    )
 
     part_numbers = list(parts_by_number.keys())
     for s in fleet["stations"]:
@@ -190,6 +268,12 @@ def seed_flights(session, fleet: dict, rng: random.Random) -> None:
             flight_number = HERO_FLIGHT_NUMBER
             dep_time = time(18, 40)
             arr_time = time(20, 25)
+        elif tail == CONNECTION_HUB_TAIL:
+            # TUL -> DFW, timed to land well before EV2301 (DFW -> CVG,
+            # 18:40) departs, so the TUL connection is always catchable.
+            flight_number = CONNECTION_FLIGHT_NUMBER
+            dep_time = time(17, 0)
+            arr_time = time(17, 45)
         else:
             flight_number = f"EV{next_flight_num}"
             next_flight_num += 1
@@ -207,10 +291,11 @@ def seed_flights(session, fleet: dict, rng: random.Random) -> None:
                 sched_arr=datetime.combine(TODAY, arr_time),
                 status=FlightStatus.scheduled,
                 cargo_capacity_lb=CARGO_CAPACITY_LB[a["type"]],
-                # Every seeded flight accepts DG for now (all domestic, same
-                # fleet type); a deliberate "DG part, not every flight is
-                # DG-approved" decoy is a later seed-data step.
-                accepts_dg=True,
+                # Every seeded flight accepts DG except DG_DECOY_TAIL's --
+                # the one flight in the fleet deliberately not DG-approved,
+                # so an expiring DG part's candidates can show a "doesn't
+                # accept dangerous goods" disqualification.
+                accepts_dg=tail != DG_DECOY_TAIL,
             )
         )
 
@@ -255,6 +340,30 @@ def seed_vendor_quotes(session, fleet: dict, rng: random.Random) -> None:
         )
 
 
+def seed_shipping_requests(session) -> None:
+    """A real AOG, raised directly by maintenance control -- seeded first
+    so Copilot's scan (below) skips its serial rather than raising a
+    duplicate, same as it would for any human-raised request."""
+    station_needed = session.get(Aircraft, AOG_TAIL).overnight_station
+    session.add(
+        ShippingRequest(
+            part_number=AOG_PART,
+            serial=f"SN-{AOG_TAIL}-{AOG_PART}",
+            station_needed=station_needed,
+            needed_by=TODAY + timedelta(days=AOG_DAYS_TO_EXPIRY),
+            priority=Priority.aog,
+            raised_by=RaisedBy.maintenance_control,
+            status=ShippingRequestStatus.open,
+        )
+    )
+    session.flush()
+
+    # Copilot's own scan: raises a request for every other part in the
+    # 7-day window (hero included) -- several STDs/MRDs, none duplicating
+    # the AOG above.
+    raise_copilot_requests(session, window_days=7, now=datetime.now())
+
+
 def main() -> None:
     fleet = load_fleet()
     rng = random.Random(SEED)
@@ -273,7 +382,9 @@ def main() -> None:
         seed_inventory(session, fleet, parts_by_number, rng)
         seed_flights(session, fleet, rng)
         seed_vendor_quotes(session, fleet, rng)
+        session.commit()
 
+        seed_shipping_requests(session)
         session.commit()
 
     print(f"Seeded comat.db: {len(fleet['stations'])} stations, "

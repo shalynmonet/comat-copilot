@@ -3,7 +3,9 @@ DFW spare should win via the EV2301 COMAT flight, while the unserviceable
 ORD spare and the too-slow vendor quote must never surface as candidates.
 """
 
-from app.models import PlanOption
+from datetime import date, datetime, time, timedelta
+
+from app.models import Flight, FlightStatus, InventoryCondition, InventoryItem, PlanOption, Station
 from app.planner.candidates import build_candidates
 from app.planner.score import pick_best, risk_of_slack
 from tests.conftest import DEADLINE, NOW
@@ -88,6 +90,37 @@ def test_dg_part_is_disqualified_from_a_flight_that_does_not_accept_dg(session, 
 
     feasible = build_candidates(session, hero_part, now=NOW)
     assert not any(c.flight_number == "EV2301" for c in feasible)
+
+
+def test_comat_connection_candidate_through_a_hub(session, hero_part):
+    """A spare with no direct flight to the destination -- only reachable
+    through a one-stop connection via a hub -- still shows up as a COMAT
+    candidate (candidates._comat_connection_candidates wires
+    flight_search.search_flight_options into the candidate list, on top
+    of EV2301's own direct DFW -> CVG leg)."""
+    today = date.today()
+    session.add_all(
+        [
+            Station(code="TUL", name="Tulsa", lat=36.1984, lon=-95.8881, has_maintenance=False, stores_capacity=50, pal_number="PAL-TUL-01"),
+            InventoryItem(
+                serial="INV-TUL-OXY-BTL-02-1", part_number="OXY-BTL-02", station="TUL",
+                condition=InventoryCondition.serviceable, expires_on=today + timedelta(days=400), last_counted_on=today,
+            ),
+            Flight(
+                flight_number="EV9000", tail_number="N999EV", origin="TUL", dest="DFW",
+                sched_dep=datetime.combine(today, time(10, 0)), sched_arr=datetime.combine(today, time(11, 0)),
+                status=FlightStatus.scheduled, cargo_capacity_lb=2500.0, accepts_dg=True,
+            ),
+        ]
+    )
+    session.commit()
+
+    candidates = build_candidates(session, hero_part, now=NOW)
+    connection = next((c for c in candidates if c.option == PlanOption.comat and c.source == "TUL"), None)
+
+    assert connection is not None
+    assert connection.flight_number == "EV9000/EV2301"
+    assert not connection.disqualified
 
 
 def test_risk_of_slack_bounds():

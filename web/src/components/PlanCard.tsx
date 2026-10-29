@@ -238,8 +238,8 @@ export function PlanCard({
             );
           })}
 
-          {disqualified.map((c) => (
-            <div key={`${candidateKey(c)}-dq`} className="candidate-card disqualified">
+          {disqualified.map((c, i) => (
+            <div key={`${candidateKey(c)}-dq-${i}`} className="candidate-card disqualified">
               <div className="row">
                 <span className="option-badge">{c.option}</span>
                 <span>${c.cost.toFixed(0)}</span>

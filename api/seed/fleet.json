@@ -52,7 +52,7 @@
     {"part_number": "ELT-MAIN", "description": "Emergency Locator Transmitter", "position": "ELT-FWD", "shelf_life_days": 1825, "is_rotable": false, "unit_cost": 1450, "weight_lb": 3},
     {"part_number": "HYD-PUMP-A", "description": "Hydraulic Pump, Engine-Driven", "position": "ENG-1-HYD", "shelf_life_days": 9999, "is_rotable": true, "unit_cost": 24500, "weight_lb": 32},
     {"part_number": "HYD-PUMP-B", "description": "Hydraulic Pump, Electric", "position": "HYD-BAY-2", "shelf_life_days": 9999, "is_rotable": true, "unit_cost": 18200, "weight_lb": 28},
-    {"part_number": "TIRE-MAIN", "description": "Main Landing Gear Tire", "position": "MLG-L", "shelf_life_days": 2190, "is_rotable": false, "unit_cost": 980, "weight_lb": 95},
+    {"part_number": "TIRE-MAIN", "description": "Main Landing Gear Tire", "position": "MLG-L", "shelf_life_days": 2190, "is_rotable": false, "unit_cost": 980, "weight_lb": 95, "is_oversize": true},
     {"part_number": "TIRE-NOSE", "description": "Nose Landing Gear Tire", "position": "NLG", "shelf_life_days": 2190, "is_rotable": false, "unit_cost": 620, "weight_lb": 55},
     {"part_number": "BRAKE-ASSY", "description": "Brake Assembly", "position": "MLG-L-BRAKE", "shelf_life_days": 9999, "is_rotable": true, "unit_cost": 15800, "weight_lb": 110},
     {"part_number": "STARTER-GEN", "description": "Starter Generator", "position": "ENG-2-ELEC", "shelf_life_days": 9999, "is_rotable": true, "unit_cost": 32000, "weight_lb": 65},
