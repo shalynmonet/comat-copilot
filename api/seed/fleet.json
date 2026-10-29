@@ -32,7 +32,7 @@
     {"tail_number": "N520EV", "type": "CRJ900", "current_station": "ORD", "overnight_station": "AUS"}
   ],
   "parts": [
-    {"part_number": "OXY-BTL-02", "description": "Crew Oxygen Bottle, 2L", "position": "OXY-CREW-1", "shelf_life_days": 730, "is_rotable": false, "unit_cost": 850, "weight_lb": 18, "is_dangerous_goods": true},
+    {"part_number": "OXY-BTL-02", "description": "Crew Oxygen Bottle, 2L", "position": "OXY-CREW-1", "shelf_life_days": 730, "is_rotable": false, "unit_cost": 850, "weight_lb": 18, "is_dangerous_goods": true, "dg_class": "2.2"},
     {"part_number": "OXY-BTL-04", "description": "Crew Oxygen Bottle, 4L", "position": "OXY-CREW-2", "shelf_life_days": 730, "is_rotable": false, "unit_cost": 1200, "weight_lb": 26},
     {"part_number": "OXY-PAX-01", "description": "Passenger Oxygen Generator", "position": "PSU-CABIN", "shelf_life_days": 1825, "is_rotable": false, "unit_cost": 180, "weight_lb": 4},
     {"part_number": "FIRE-EXT-HALON", "description": "Halon Fire Extinguisher", "position": "COCKPIT-EXT", "shelf_life_days": 1825, "is_rotable": false, "unit_cost": 320, "weight_lb": 5},

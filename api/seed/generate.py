@@ -86,6 +86,8 @@ def seed_parts(session, fleet: dict) -> dict:
             unit_cost=p["unit_cost"],
             weight_lb=p["weight_lb"],
             is_dangerous_goods=p.get("is_dangerous_goods", False),
+            dg_class=p.get("dg_class"),
+            is_oversize=p.get("is_oversize", False),
         )
         session.add(part)
         parts_by_number[p["part_number"]] = p

@@ -1,6 +1,7 @@
-"""Covers the mock iCargo adapter: it should confirm a booking when the
-flight exists and has room, refuse one that doesn't, and the swap point
-(get_cargo_adapter / CARGO_ADAPTER) should behave as documented.
+"""Covers the mock iCargo adapter: create_shipment -> book -> get_awb for
+both plane_side (flight-checked) and to_cargo (no specific flight)
+shipments, refusing an unbookable flight, fake AWBs always marked as
+demo data, and the swap point (get_cargo_adapter / CARGO_ADAPTER).
 """
 
 from datetime import datetime, time
@@ -8,9 +9,9 @@ from datetime import datetime, time
 import pytest
 
 from app.adapters.icargo_adapter import (
-    BookingRequest,
     CargoBookingError,
     MockICargoAdapter,
+    ShipmentRequest,
     get_cargo_adapter,
 )
 from app.models import Flight, FlightStatus, Station
@@ -39,36 +40,57 @@ def seeded_flight(session):
     return flight
 
 
-def test_books_a_flight_with_room(session, seeded_flight):
-    adapter = MockICargoAdapter()
-    confirmation = adapter.book(
-        session, BookingRequest(flight_number="EV2301", part_number="OXY-BTL-02", serial="SN-1", weight_lb=18)
+def _request(**overrides):
+    defaults = dict(
+        part_number="OXY-BTL-02", serial="SN-1", weight_lb=18,
+        flight_number="EV2301", handoff_route="plane_side",
     )
+    defaults.update(overrides)
+    return ShipmentRequest(**defaults)
+
+
+def test_plane_side_chain_books_the_named_flight(session, seeded_flight):
+    adapter = MockICargoAdapter()
+    shipment = adapter.create_shipment(session, _request())
+    confirmation = adapter.book(session, shipment)
+    awb = adapter.get_awb(session, shipment)
 
     assert confirmation.status == "confirmed"
     assert confirmation.flight_number == "EV2301"
     assert confirmation.booked_weight_lb == 18
     assert confirmation.confirmation_number.startswith("ICRG-")
-    assert confirmation.awb_number.startswith("AWB-")
     assert confirmation.source == "mock"
+    assert awb.startswith("DEMO-AWB-")  # never mistakable for a real AWB
+
+
+def test_to_cargo_chain_does_not_need_a_specific_flight(session):
+    adapter = MockICargoAdapter()
+    shipment = adapter.create_shipment(session, _request(flight_number=None, handoff_route="to_cargo"))
+    confirmation = adapter.book(session, shipment)
+
+    assert confirmation.status == "confirmed"
+    assert confirmation.flight_number is None
+
+
+def test_plane_side_without_a_flight_number_is_refused(session):
+    adapter = MockICargoAdapter()
+    shipment = adapter.create_shipment(session, _request(flight_number=None))
+    with pytest.raises(CargoBookingError, match="needs a flight"):
+        adapter.book(session, shipment)
 
 
 def test_refuses_a_flight_without_enough_capacity(session, seeded_flight):
     adapter = MockICargoAdapter()
+    shipment = adapter.create_shipment(session, _request(weight_lb=9999))
     with pytest.raises(CargoBookingError, match="capacity"):
-        adapter.book(
-            session,
-            BookingRequest(flight_number="EV2301", part_number="BRAKE-ASSY", serial="SN-2", weight_lb=9999),
-        )
+        adapter.book(session, shipment)
 
 
 def test_refuses_a_nonexistent_flight(session):
     adapter = MockICargoAdapter()
+    shipment = adapter.create_shipment(session, _request(flight_number="EV9999"))
     with pytest.raises(CargoBookingError, match="no such flight"):
-        adapter.book(
-            session,
-            BookingRequest(flight_number="EV9999", part_number="OXY-BTL-02", serial="SN-3", weight_lb=18),
-        )
+        adapter.book(session, shipment)
 
 
 def test_refuses_a_cancelled_flight(session, seeded_flight):
@@ -77,11 +99,9 @@ def test_refuses_a_cancelled_flight(session, seeded_flight):
     session.commit()
 
     adapter = MockICargoAdapter()
+    shipment = adapter.create_shipment(session, _request())
     with pytest.raises(CargoBookingError, match="cancelled"):
-        adapter.book(
-            session,
-            BookingRequest(flight_number="EV2301", part_number="OXY-BTL-02", serial="SN-4", weight_lb=18),
-        )
+        adapter.book(session, shipment)
 
 
 def test_get_cargo_adapter_defaults_to_mock(monkeypatch):
