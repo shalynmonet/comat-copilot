@@ -68,10 +68,14 @@ Either way, open http://localhost:5173.
 
 ## Architecture
 
+[**Architecture diagram**](docs/architecture-diagram.html) -- three source systems on the left (Sceptre, iCargo, a shipping system), COMAT Copilot's adapter layer in the middle, the planner on the right. Today all three adapters answer from seeded mock data; in a pilot each one swaps independently (`PARTS_ADAPTER`, `CARGO_ADAPTER`, `SHIPPING_ADAPTER`) and nothing else in the app changes.
+
 ```
 comat-copilot/
   docker-compose.yml     # one command: api + web, seeded data
   .env.example           # ANTHROPIC_API_KEY, DATABASE_URL, EXPIRY_WINDOW_DAYS
+  docs/
+    architecture-diagram.html  # the three-adapters picture above, standalone
   api/
     app/
       main.py             # FastAPI app, CORS, router wiring
@@ -79,16 +83,21 @@ comat-copilot/
       db.py                # engine/session, reads DATABASE_URL (SQLite by default)
       schemas.py           # request/response shapes that aren't tables
       planner/
-        candidates.py     # finds COMAT / transfer / buy options, drops infeasible ones
+        candidates.py     # finds COMAT / transfer / buy options, flags disqualified ones with why
         score.py          # cost + risk scoring, ranking
+        decisions.py      # approve / choose-alternative -- the human-decision paths
         replan.py         # reruns active plans when a flight changes
+      adapters/            # the pilot swap points -- mock today, a real system behind each later
+        sceptre_adapter.py    # parts & expiry (PARTS_ADAPTER)
+        icargo_adapter.py     # cargo capacity & booking (CARGO_ADAPTER)
+        shipping_adapter.py   # shipping ticket & work order (SHIPPING_ADAPTER)
       ai/
         explain.py        # Claude writes the one-line reason; templated fallback with no key
       routes/              # parts, plans, flights, events, stations
     seed/
       fleet.json           # the static, human-reviewable world: stations, tails, parts, vendors
       generate.py          # layers on time-relative state; hero scenario + decoys hardcoded
-    tests/                 # pytest: planner, re-plan, Claude fallback (14 tests)
+    tests/                 # pytest: planner, re-plan, adapters, Claude fallback
   web/
     src/
       api.ts               # typed fetch client

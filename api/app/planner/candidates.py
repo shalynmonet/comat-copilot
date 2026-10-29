@@ -51,6 +51,7 @@ class Candidate:
     detail: str
     disqualified: bool = False
     disqualified_reason: Optional[str] = None
+    is_dangerous_goods: bool = False
 
 
 def _haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -103,6 +104,7 @@ def _comat_candidates(
                     detail=f"ride flight {flight.flight_number} from {spare.station}, arrives {flight.sched_arr:%H:%M}",
                     disqualified=reason is not None,
                     disqualified_reason=reason,
+                    is_dangerous_goods=part.is_dangerous_goods,
                 )
             )
     return candidates
@@ -138,6 +140,7 @@ def _transfer_candidates(
                 detail=f"ground transfer from {spare.station}, {distance:.0f} mi, arrives {eta:%H:%M}",
                 disqualified=reason is not None,
                 disqualified_reason=reason,
+                is_dangerous_goods=part.is_dangerous_goods,
             )
         )
     return candidates
@@ -166,6 +169,7 @@ def _buy_candidates(
                 detail=f"buy from {quote.vendor}, lead time {quote.lead_time_hrs:.0f}h",
                 disqualified=reason is not None,
                 disqualified_reason=reason,
+                is_dangerous_goods=part.is_dangerous_goods,
             )
         )
     return candidates

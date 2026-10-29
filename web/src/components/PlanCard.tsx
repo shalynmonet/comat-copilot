@@ -185,6 +185,7 @@ export function PlanCard({
                   <span>arrives {formatEta(c.eta)}</span>
                 </div>
                 <div className="detail">{c.detail}</div>
+                {c.is_dangerous_goods && <div className="dg-badge">⚠ Dangerous goods</div>}
                 {isSelected && <div className="current-tag">current plan</div>}
 
                 {editable &&
@@ -249,6 +250,7 @@ export function PlanCard({
                 </span>
               </div>
               <div className="disqualified-reason">Disqualified: {c.disqualified_reason}</div>
+              {c.is_dangerous_goods && <div className="dg-badge">⚠ Dangerous goods</div>}
             </div>
           ))}
 

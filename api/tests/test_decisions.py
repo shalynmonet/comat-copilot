@@ -35,7 +35,7 @@ def test_approve_on_a_plain_proposed_plan_just_flips_status(session, hero_part):
     assert result.option == PlanOption.comat  # unchanged, nothing was pending
 
 
-def test_approving_a_comat_plan_books_cargo_and_logs_a_shipped_event(session, hero_part):
+def test_approving_a_comat_plan_books_cargo_and_a_shipping_ticket(session, hero_part):
     plan = _hero_plan(session, hero_part, PlanStatus.proposed)
     assert plan.option == PlanOption.comat  # the hero fixture's winning option
 
@@ -46,9 +46,13 @@ def test_approving_a_comat_plan_books_cargo_and_logs_a_shipped_event(session, he
     assert len(shipped) == 1
     assert "iCargo booking confirmed" in shipped[0].detail
     assert "EV2301" in shipped[0].detail
+    assert "shipping ticket" in shipped[0].detail
+    assert "work order" in shipped[0].detail
+    # the hero part is seeded as dangerous goods
+    assert "DANGEROUS GOODS" in shipped[0].detail
 
 
-def test_approving_a_non_comat_plan_does_not_book_cargo(session, hero_part):
+def test_approving_a_non_comat_plan_still_gets_a_shipping_ticket_but_no_booking(session, hero_part):
     plan = _hero_plan(session, hero_part, PlanStatus.proposed)
     result = choose_alternative(
         session,
@@ -63,7 +67,11 @@ def test_approving_a_non_comat_plan_does_not_book_cargo(session, hero_part):
     assert result.option == PlanOption.buy
 
     events = session.exec(select(PlanEvent).where(PlanEvent.plan_id == plan.id)).all()
-    assert not any(e.event_type.value == "shipped" for e in events)
+    shipped = [e for e in events if e.event_type.value == "shipped"]
+    assert len(shipped) == 1
+    assert "shipping ticket" in shipped[0].detail
+    assert "work order" in shipped[0].detail
+    assert "iCargo booking" not in shipped[0].detail
 
 
 def test_approve_adopts_a_pending_recommendation(session, hero_part):

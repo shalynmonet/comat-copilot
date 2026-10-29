@@ -62,6 +62,15 @@ def test_disqualified_candidates_surface_with_reasons_when_requested(session, he
     assert comat.disqualified_reason is None
 
 
+def test_dangerous_goods_part_flags_every_candidate(session, hero_part):
+    # the hero part (crew oxygen bottle) is seeded as dangerous goods -- the
+    # flag is a property of the part, so it should carry onto every option,
+    # not just the winning one.
+    candidates = build_candidates(session, hero_part, now=NOW, include_disqualified=True)
+    assert candidates
+    assert all(c.is_dangerous_goods for c in candidates)
+
+
 def test_risk_of_slack_bounds():
     assert risk_of_slack(48) == 0.0
     assert risk_of_slack(0) == 1.0

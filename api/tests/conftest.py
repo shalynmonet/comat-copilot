@@ -43,7 +43,7 @@ def hero_part(session):
             Station(code="CVG", name="Cincinnati/N. Kentucky", lat=39.0488, lon=-84.6678, has_maintenance=False, stores_capacity=80),
             Station(code="ORD", name="Chicago O'Hare", lat=41.9742, lon=-87.9073, has_maintenance=True, stores_capacity=300),
             Aircraft(tail_number="N501EV", type="E175", current_station="CVG", overnight_station="CVG"),
-            Part(part_number="OXY-BTL-02", description="Crew Oxygen Bottle, 2L", shelf_life_days=730, is_rotable=False, unit_cost=850, weight_lb=18),
+            Part(part_number="OXY-BTL-02", description="Crew Oxygen Bottle, 2L", shelf_life_days=730, is_rotable=False, unit_cost=850, weight_lb=18, is_dangerous_goods=True),
         ]
     )
     installed = InstalledPart(

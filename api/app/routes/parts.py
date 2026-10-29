@@ -4,8 +4,9 @@ from datetime import date
 from fastapi import APIRouter, HTTPException
 from sqlmodel import select
 
+from app.adapters.sceptre_adapter import get_parts_adapter
 from app.db import get_session
-from app.models import Aircraft, InstalledPart, Part
+from app.models import Part
 from app.schemas import ExpiringPartOut
 
 DEFAULT_WINDOW_DAYS = int(os.environ.get("EXPIRY_WINDOW_DAYS", 7))
@@ -32,28 +33,18 @@ def get_part(part_number: str):
 def expiring_parts(window_days: int = DEFAULT_WINDOW_DAYS):
     today = date.today()
     with get_session() as session:
-        installed = session.exec(select(InstalledPart)).all()
-        parts_by_number = {p.part_number: p for p in session.exec(select(Part)).all()}
-        aircraft_by_tail = {a.tail_number: a for a in session.exec(select(Aircraft)).all()}
-
-        out = []
-        for ip in installed:
-            days_left = (ip.expires_on - today).days
-            if days_left > window_days:
-                continue
-            part = parts_by_number.get(ip.part_number)
-            aircraft = aircraft_by_tail.get(ip.tail_number)
-            out.append(
-                ExpiringPartOut(
-                    serial=ip.serial,
-                    part_number=ip.part_number,
-                    description=part.description if part else "",
-                    tail_number=ip.tail_number,
-                    station=aircraft.overnight_station if aircraft else "",
-                    position=ip.position,
-                    expires_on=ip.expires_on,
-                    days_left=days_left,
-                )
+        adapter = get_parts_adapter()
+        records = adapter.list_expiring(session, window_days, today)
+        return [
+            ExpiringPartOut(
+                serial=r.serial,
+                part_number=r.part_number,
+                description=r.description,
+                tail_number=r.tail_number,
+                station=r.station,
+                position=r.position,
+                expires_on=r.expires_on,
+                days_left=(r.expires_on - today).days,
             )
-        out.sort(key=lambda p: p.days_left)
-        return out
+            for r in records
+        ]

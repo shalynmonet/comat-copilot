@@ -30,6 +30,7 @@ class CandidateOut(BaseModel):
     detail: str
     disqualified: bool = False
     disqualified_reason: Optional[str] = None
+    is_dangerous_goods: bool = False
 
 
 class PlanCreateRequest(BaseModel):

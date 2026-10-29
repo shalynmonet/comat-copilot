@@ -41,6 +41,7 @@ export interface Candidate {
   detail: string;
   disqualified: boolean;
   disqualified_reason: string | null;
+  is_dangerous_goods: boolean;
 }
 
 export type OverrideReason = "flight_usually_full" | "preferred_vendor" | "spare_needed_elsewhere" | "other";

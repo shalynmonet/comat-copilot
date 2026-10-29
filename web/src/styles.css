@@ -203,6 +203,19 @@ header.app-header .tagline {
   color: #f87171;
 }
 
+.dg-badge {
+  display: inline-block;
+  margin-top: 0.35rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: #78350f;
+  color: #fde68a;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 .current-tag {
   display: inline-block;
   margin-top: 0.4rem;

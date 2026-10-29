@@ -50,6 +50,7 @@ def get_candidates(installed_serial: str):
                 detail=r.candidate.detail,
                 disqualified=False,
                 disqualified_reason=None,
+                is_dangerous_goods=r.candidate.is_dangerous_goods,
             )
             for r in ranked
         ]
@@ -65,6 +66,7 @@ def get_candidates(installed_serial: str):
                 detail=c.detail,
                 disqualified=True,
                 disqualified_reason=c.disqualified_reason,
+                is_dangerous_goods=c.is_dangerous_goods,
             )
             for c in disqualified
         ]

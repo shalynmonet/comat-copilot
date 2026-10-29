@@ -84,6 +84,7 @@ class Part(SQLModel, table=True):
     is_rotable: bool = False
     unit_cost: float
     weight_lb: float
+    is_dangerous_goods: bool = False
 
 
 class InstalledPart(SQLModel, table=True):
