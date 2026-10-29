@@ -35,6 +35,37 @@ def test_approve_on_a_plain_proposed_plan_just_flips_status(session, hero_part):
     assert result.option == PlanOption.comat  # unchanged, nothing was pending
 
 
+def test_approving_a_comat_plan_books_cargo_and_logs_a_shipped_event(session, hero_part):
+    plan = _hero_plan(session, hero_part, PlanStatus.proposed)
+    assert plan.option == PlanOption.comat  # the hero fixture's winning option
+
+    approve_plan(session, plan)
+
+    events = session.exec(select(PlanEvent).where(PlanEvent.plan_id == plan.id)).all()
+    shipped = [e for e in events if e.event_type.value == "shipped"]
+    assert len(shipped) == 1
+    assert "iCargo booking confirmed" in shipped[0].detail
+    assert "EV2301" in shipped[0].detail
+
+
+def test_approving_a_non_comat_plan_does_not_book_cargo(session, hero_part):
+    plan = _hero_plan(session, hero_part, PlanStatus.proposed)
+    result = choose_alternative(
+        session,
+        plan,
+        hero_part,
+        option=PlanOption.buy,
+        source="AeroSource",
+        flight_number=None,
+        reason=OverrideReason.preferred_vendor,
+        note=None,
+    )
+    assert result.option == PlanOption.buy
+
+    events = session.exec(select(PlanEvent).where(PlanEvent.plan_id == plan.id)).all()
+    assert not any(e.event_type.value == "shipped" for e in events)
+
+
 def test_approve_adopts_a_pending_recommendation(session, hero_part):
     plan = _hero_plan(session, hero_part, PlanStatus.approved)
     flight = session.exec(select(Flight).where(Flight.flight_number == "EV2301")).one()

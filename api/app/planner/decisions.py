@@ -9,10 +9,12 @@ from typing import Optional
 
 from sqlmodel import Session
 
+from app.adapters.icargo_adapter import BookingRequest, CargoBookingError, get_cargo_adapter
 from app.models import (
     OVERRIDE_REASON_LABELS,
     InstalledPart,
     OverrideReason,
+    Part,
     Plan,
     PlanEvent,
     PlanEventType,
@@ -38,6 +40,38 @@ def clear_pending(plan: Plan) -> None:
     plan.pending_reason = None
 
 
+def _book_cargo_if_comat(session: Session, plan: Plan) -> None:
+    """A COMAT plan rides a real flight -- holding that cargo space is the
+    "shipping ticket" step from the demo script. Booking failure never
+    blocks the approval itself; it's logged either way."""
+    if plan.option != PlanOption.comat or not plan.flight_number:
+        return
+
+    installed = session.get(InstalledPart, plan.installed_serial)
+    part = session.get(Part, installed.part_number)
+    adapter = get_cargo_adapter()
+    try:
+        confirmation = adapter.book(
+            session,
+            BookingRequest(
+                flight_number=plan.flight_number,
+                part_number=part.part_number,
+                serial=installed.serial,
+                weight_lb=part.weight_lb,
+            ),
+        )
+        detail = (
+            f"iCargo booking confirmed: {confirmation.confirmation_number} "
+            f"(AWB {confirmation.awb_number}) on {confirmation.flight_number}"
+        )
+    except CargoBookingError as e:
+        detail = f"cargo booking failed: {e}"
+
+    session.add(
+        PlanEvent(plan_id=plan.id, event_type=PlanEventType.shipped, created_at=datetime.now(), detail=detail)
+    )
+
+
 def approve_plan(session: Session, plan: Plan) -> Plan:
     if plan.pending_option is not None:
         # A flight change staged a new recommendation while this plan was
@@ -53,6 +87,7 @@ def approve_plan(session: Session, plan: Plan) -> Plan:
     plan.status = PlanStatus.approved
     session.add(plan)
     session.add(PlanEvent(plan_id=plan.id, event_type=PlanEventType.approved, created_at=datetime.now()))
+    _book_cargo_if_comat(session, plan)
     session.commit()
     session.refresh(plan)
     return plan
@@ -105,6 +140,7 @@ def choose_alternative(
             detail=f"chose {match.option.value} from {match.source}{via} instead -- {reason_text}",
         )
     )
+    _book_cargo_if_comat(session, plan)
     session.commit()
     session.refresh(plan)
     return plan
