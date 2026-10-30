@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 PRIVATE_PATH = CONFIG_DIR / "private_codes.yaml"
 EXAMPLE_PATH = CONFIG_DIR / "private_codes.example.yaml"
+SETTINGS_PATH = CONFIG_DIR / "settings.yaml"
 
 
 @dataclass
@@ -83,3 +84,72 @@ def load_private_codes() -> PrivateCodes:
         "private_codes.example.yaml. Copy the example and fill in real codes before a pilot."
     )
     return _parse(EXAMPLE_PATH)
+
+
+@dataclass
+class ConfidenceSettings:
+    base: float
+    days_weight: float
+    days_horizon: float
+    moves_weight: float
+    moves_cap: float
+    discrepancy_weight: float
+    verification_threshold: float
+    discrepancy_bump: float
+    confidence_score_weight: float
+
+
+@dataclass
+class ExpiringLotSettings:
+    window_days: int
+    scan_schedule: str
+
+
+@dataclass
+class FailureSettings:
+    verify_time_buffer_minutes: int
+
+
+@dataclass
+class StockingSettings:
+    min_failures_to_suggest: int
+
+
+@dataclass
+class Settings:
+    confidence: ConfidenceSettings
+    expiring_lots: ExpiringLotSettings
+    failures: FailureSettings
+    stocking: StockingSettings
+
+
+@lru_cache(maxsize=1)
+def load_settings() -> Settings:
+    raw = yaml.safe_load(SETTINGS_PATH.read_text())
+    c = raw["confidence"]
+    e = raw["expiring_lots"]
+    f = raw["failures"]
+    s = raw["stocking"]
+    return Settings(
+        confidence=ConfidenceSettings(
+            base=float(c["base"]),
+            days_weight=float(c["days_weight"]),
+            days_horizon=float(c["days_horizon"]),
+            moves_weight=float(c["moves_weight"]),
+            moves_cap=float(c["moves_cap"]),
+            discrepancy_weight=float(c["discrepancy_weight"]),
+            verification_threshold=float(c["verification_threshold"]),
+            discrepancy_bump=float(c["discrepancy_bump"]),
+            confidence_score_weight=float(c["confidence_score_weight"]),
+        ),
+        expiring_lots=ExpiringLotSettings(
+            window_days=int(e["window_days"]),
+            scan_schedule=str(e["scan_schedule"]),
+        ),
+        failures=FailureSettings(
+            verify_time_buffer_minutes=int(f["verify_time_buffer_minutes"]),
+        ),
+        stocking=StockingSettings(
+            min_failures_to_suggest=int(s["min_failures_to_suggest"]),
+        ),
+    )

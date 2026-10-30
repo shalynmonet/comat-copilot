@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api";
 import type {
   Candidate,
+  DashboardStats,
   ExpiringPart,
   FieldSpec,
   Flight,
@@ -16,12 +18,18 @@ import { ExpiryQueue } from "../components/ExpiryQueue";
 import { PlanCard } from "../components/PlanCard";
 import { EventTimeline } from "../components/EventTimeline";
 import { ShipmentDraftPanel } from "../components/ShipmentDraftPanel";
+import { VerifyTasksPanel } from "../components/VerifyTasksPanel";
+import { ExpiringLotsPanel } from "../components/ExpiringLotsPanel";
+import { FailuresPanel } from "../components/FailuresPanel";
+import { StockingPanel } from "../components/StockingPanel";
+import { DashboardStatsBar } from "../components/DashboardStatsBar";
 
 export function Dashboard() {
   const [stations, setStations] = useState<Station[]>([]);
   const [parts, setParts] = useState<ExpiringPart[]>([]);
   const [flights, setFlights] = useState<Flight[]>([]);
   const [fieldSpecs, setFieldSpecs] = useState<FieldSpec[]>([]);
+  const [stats, setStats] = useState<DashboardStats | null>(null);
 
   const [selectedPart, setSelectedPart] = useState<ExpiringPart | null>(null);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -30,12 +38,19 @@ export function Dashboard() {
   const [events, setEvents] = useState<PlanEvent[]>([]);
   const [drafts, setDrafts] = useState<ShipmentDraft[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [verifyRefreshKey, setVerifyRefreshKey] = useState(0);
+  const bumpVerifyRefresh = () => setVerifyRefreshKey((k) => k + 1);
+
+  const refreshStats = () => {
+    api.getDashboardStats().then(setStats).catch((e) => setError(String(e)));
+  };
 
   useEffect(() => {
     api.getStations().then(setStations).catch((e) => setError(String(e)));
     api.getExpiringParts().then(setParts).catch((e) => setError(String(e)));
     api.getFlights().then(setFlights).catch((e) => setError(String(e)));
     api.getFieldSpecs().then(setFieldSpecs).catch((e) => setError(String(e)));
+    refreshStats();
   }, []);
 
   const refreshCandidates = (serial: string) => {
@@ -89,6 +104,7 @@ export function Dashboard() {
       const created = await api.createPlan(selectedPart.serial);
       const approved = await api.approvePlan(created.id);
       setPlan(approved);
+      bumpVerifyRefresh();
     } catch (e) {
       setError(String(e));
     }
@@ -111,6 +127,7 @@ export function Dashboard() {
         note: note.trim() || undefined,
       });
       setPlan(result);
+      bumpVerifyRefresh();
     } catch (e) {
       setError(String(e));
     }
@@ -122,6 +139,7 @@ export function Dashboard() {
     try {
       const result = await api.approvePlan(plan.id);
       setPlan(result);
+      bumpVerifyRefresh();
     } catch (e) {
       setError(String(e));
     }
@@ -157,6 +175,13 @@ export function Dashboard() {
     }
   };
 
+  const handleVerifyTaskResolved = () => {
+    refreshStats();
+    if (plan) {
+      api.getPlan(plan.id).then(setPlan).catch((e) => setError(String(e)));
+    }
+  };
+
   const activeStatuses: Plan["status"][] = ["proposed", "approved", "at_risk", "re_routed"];
   const canDelay = !!plan && !!plan.flight_number && activeStatuses.includes(plan.status);
 
@@ -165,7 +190,12 @@ export function Dashboard() {
       <header className="app-header">
         <h1>COMAT Copilot</h1>
         <span className="tagline">finding every part about to expire, and the cheapest safe way to fix it</span>
+        <nav className="app-nav">
+          <Link to="/pickslip">PickSlip</Link>
+          <Link to="/issued">Issued Summary</Link>
+        </nav>
       </header>
+      <DashboardStatsBar stats={stats} />
       <div className="app-main">
         <ExpiryQueue parts={parts} selectedSerial={selectedPart?.serial ?? null} onSelect={handleSelectPart} />
         <div className="map-panel">
@@ -184,6 +214,12 @@ export function Dashboard() {
           error={error}
         />
         <ShipmentDraftPanel drafts={drafts} fieldSpecs={fieldSpecs} onSubmit={handleSubmitShipment} error={null} />
+      </div>
+      <div className="stores-queue">
+        <VerifyTasksPanel onResolved={handleVerifyTaskResolved} refreshSignal={verifyRefreshKey} />
+        <ExpiringLotsPanel onApproved={refreshStats} />
+        <FailuresPanel onReported={refreshStats} />
+        <StockingPanel onApproved={refreshStats} />
       </div>
       <EventTimeline events={events} />
     </div>

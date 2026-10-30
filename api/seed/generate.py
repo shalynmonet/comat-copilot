@@ -27,12 +27,16 @@ from app.models import (
     Part,
     Priority,
     RaisedBy,
+    RemovalHistory,
+    RemovalReason,
     ShippingRequest,
     ShippingRequestStatus,
     Station,
     VendorQuote,
 )
+from app.adapters.m3_adapter import get_m3_adapter
 from app.planner.intake import raise_copilot_requests
+from seed.tag_images import main as generate_tag_images
 
 FLEET_PATH = Path(__file__).parent / "fleet.json"
 SEED = 42
@@ -61,6 +65,16 @@ DECOY_VENDOR_LEAD_HRS = 60.0  # deadline is 48 hrs out; this misses it
 # alongside the already-serviceable DFW spare that *does* ride DG.
 DG_DECOY_TAIL = "N516EV"
 
+# That same ORD spare also looks low-confidence: never individually
+# photo-verified, moved around a lot recently, at a station with a real
+# discrepancy history -- below the verification threshold without
+# disturbing the hero's own DFW-sourced plan. Paired with a seeded tag
+# photo that *doesn't* match this record (see app/adapters/verify_tag.py)
+# so the mismatch/phantom-flag flow is directly demoable.
+LOW_CONFIDENCE_STATION = "ORD"
+LOW_CONFIDENCE_DISCREPANCY_RATE = 0.35
+LOW_CONFIDENCE_MOVE_COUNT_30D = 5
+
 # Connection scenario: a second expiring part on the hero's own tail,
 # whose only spare is at TUL -- no direct TUL -> CVG flight exists, so
 # the planner has to find it via the TUL -> DFW -> CVG connection
@@ -85,6 +99,44 @@ AOG_TAIL = "N502EV"
 AOG_PART = "APU-BATT"
 AOG_DAYS_TO_EXPIRY = -1
 
+# Pick-and-issue demo: an open part request waiting in the PickSlip,
+# where the shelf tag at the expected bin doesn't match M3's record --
+# the stock clerk discovers the phantom part at pick time instead of a
+# plan-approval verify_task.
+PICK_PART = "STARTER-GEN"
+PICK_STATION = "AUS"
+PICK_TAIL = "N509EV"
+PICK_MECHANIC = "Mike (Line Maint)"
+PICK_LOCATION = "BIN-AUS-07"
+PICK_SERIAL = "INV-AUS-STARTER-GEN-1"
+
+# Expiring-lots demo (M3's Expiring Lot Report): one lot another station
+# genuinely needs before it expires (move), one with no demand anywhere
+# (replace -- with no other spare at its station, so Copilot also raises
+# a replacement request).
+EXPIRING_MOVE_PART = "FAK-STD"
+EXPIRING_MOVE_LOT_STATION = "ORD"
+EXPIRING_MOVE_LOT_SERIAL = "INV-ORD-FAK-STD-1"
+EXPIRING_MOVE_LOT = "LOT-ORD-FAK-01"
+EXPIRING_MOVE_NEED_TAIL = "N516EV"  # already overnights at CVG
+EXPIRING_MOVE_NEED_DAYS = 10
+
+EXPIRING_REPLACE_PART = "PBE-SMOKE"
+EXPIRING_REPLACE_STATION = "SDF"
+EXPIRING_REPLACE_LOT_SERIAL = "INV-SDF-PBE-SMOKE-1"
+EXPIRING_REPLACE_LOT = "LOT-SDF-PBE-01"
+
+# Unscheduled-failure demo: AVIONICS-GPS installed on N508EV (DFW -> AUS).
+# The closest spare (ORD) is low-confidence; the real answer is the
+# already-verified spare at DFW. Left open for the "Report failure" form
+# to walk through live -- not pre-resolved at seed time.
+FAILURE_TAIL = "N508EV"
+FAILURE_PART = "AVIONICS-GPS"
+FAILURE_STATION = "AUS"
+FAILURE_LOW_CONFIDENCE_SERIAL = "INV-ORD-AVIONICS-GPS-LOW"
+FAILURE_VERIFIED_SERIAL = "INV-DFW-AVIONICS-GPS-GOOD"
+FAILURE_REMOVAL_TAILS = ["N502EV", "N506EV", "N518EV"]  # other CRJ900s with a failure history
+
 # A few more parts forced into the 7-day expiry window, on other tails, so
 # the queue has several entries total (hero + these) instead of just one.
 NEAR_EXPIRY_OVERRIDES = [
@@ -106,7 +158,10 @@ def load_fleet() -> dict:
 
 def seed_stations(session, fleet: dict) -> None:
     for s in fleet["stations"]:
-        session.add(Station(**s))
+        station = Station(**s)
+        if station.code == LOW_CONFIDENCE_STATION:
+            station.discrepancy_rate = LOW_CONFIDENCE_DISCREPANCY_RATE
+        session.add(station)
 
 
 def seed_aircraft(session, fleet: dict) -> None:
@@ -202,7 +257,10 @@ def seed_inventory(session, fleet: dict, parts_by_number: dict, rng: random.Rand
         )
     )
     # DG decoy: a second, serviceable ORD spare -- reachable only by the
-    # one flight in the fleet that doesn't accept dangerous goods.
+    # one flight in the fleet that doesn't accept dangerous goods. Also
+    # the low-confidence scenario: never photo-verified, moved a lot
+    # recently, at a station with a discrepancy history (see
+    # seed_stations above) -- below the verification threshold.
     session.add(
         InventoryItem(
             serial=f"INV-{DECOY_UNSERVICEABLE_STATION}-{HERO_PART}-2",
@@ -211,6 +269,7 @@ def seed_inventory(session, fleet: dict, parts_by_number: dict, rng: random.Rand
             condition=InventoryCondition.serviceable,
             expires_on=TODAY + timedelta(days=400),
             last_counted_on=TODAY - timedelta(days=1),
+            move_count_30d=LOW_CONFIDENCE_MOVE_COUNT_30D,
         )
     )
     # Connection scenario: the only spare is at TUL, with no direct
@@ -364,6 +423,136 @@ def seed_shipping_requests(session) -> None:
     raise_copilot_requests(session, window_days=7, now=datetime.now())
 
 
+def seed_pick_demo(session) -> None:
+    """A serviceable spare on the shelf at its expected bin, and an open
+    part request a stock clerk can walk through the PickSlip flow for --
+    using the seeded mismatching tag photo shows the shelf doesn't
+    actually have what M3's record says."""
+    session.add(
+        InventoryItem(
+            serial=PICK_SERIAL,
+            part_number=PICK_PART,
+            station=PICK_STATION,
+            condition=InventoryCondition.serviceable,
+            expires_on=TODAY + timedelta(days=400),
+            last_counted_on=TODAY - timedelta(days=1),
+            location=PICK_LOCATION,
+        )
+    )
+    session.commit()
+
+    get_m3_adapter().create_part_request(
+        session, PICK_MECHANIC, PICK_TAIL, PICK_PART, 1, PICK_STATION, datetime.now()
+    )
+
+
+def seed_expiring_lots_demo(session, parts_by_number: dict) -> None:
+    """Two lots M3's Expiring Lot Report would surface: one at ORD that
+    CVG genuinely needs before it expires (move), and one with no demand
+    anywhere, and no other spare at its own station either (replace --
+    with Copilot raising a replacement request)."""
+    # Move: a real need at CVG, due before the ORD lot expires.
+    _add_installed_part(session, EXPIRING_MOVE_NEED_TAIL, EXPIRING_MOVE_PART, parts_by_number, EXPIRING_MOVE_NEED_DAYS)
+    session.add(
+        ShippingRequest(
+            part_number=EXPIRING_MOVE_PART,
+            serial=f"SN-{EXPIRING_MOVE_NEED_TAIL}-{EXPIRING_MOVE_PART}",
+            station_needed="CVG",
+            needed_by=TODAY + timedelta(days=EXPIRING_MOVE_NEED_DAYS),
+            priority=Priority.std,
+            raised_by=RaisedBy.maintenance_control,
+            status=ShippingRequestStatus.open,
+        )
+    )
+    session.add(
+        InventoryItem(
+            serial=EXPIRING_MOVE_LOT_SERIAL,
+            part_number=EXPIRING_MOVE_PART,
+            station=EXPIRING_MOVE_LOT_STATION,
+            condition=InventoryCondition.serviceable,
+            expires_on=TODAY + timedelta(days=EXPIRING_MOVE_NEED_DAYS + 2),
+            last_counted_on=TODAY - timedelta(days=1),
+            lot=EXPIRING_MOVE_LOT,
+            location="BIN-ORD-12",
+        )
+    )
+
+    # Replace: nobody needs it, and it's the only one at its station.
+    session.add(
+        InventoryItem(
+            serial=EXPIRING_REPLACE_LOT_SERIAL,
+            part_number=EXPIRING_REPLACE_PART,
+            station=EXPIRING_REPLACE_STATION,
+            condition=InventoryCondition.serviceable,
+            expires_on=TODAY + timedelta(days=15),
+            last_counted_on=TODAY - timedelta(days=1),
+            lot=EXPIRING_REPLACE_LOT,
+            location="BIN-SDF-03",
+        )
+    )
+    session.commit()
+
+
+def seed_failure_demo(session, parts_by_number: dict) -> None:
+    """AVIONICS-GPS installed on N508EV, ready for the "Report failure"
+    form: the closest spare (ORD) is low-confidence, the verified one at
+    DFW is the real answer. Plus a few months of removal history --
+    enough AVIONICS-GPS/CRJ900 failures elsewhere to cross the stocking
+    threshold, and a couple of unrelated single removals for texture."""
+    _add_installed_part(session, FAILURE_TAIL, FAILURE_PART, parts_by_number, 400)
+    session.add_all(
+        [
+            InventoryItem(
+                serial=FAILURE_LOW_CONFIDENCE_SERIAL,
+                part_number=FAILURE_PART,
+                station="ORD",
+                condition=InventoryCondition.serviceable,
+                expires_on=TODAY + timedelta(days=400),
+                last_counted_on=TODAY - timedelta(days=1),
+                move_count_30d=4,
+            ),
+            InventoryItem(
+                serial=FAILURE_VERIFIED_SERIAL,
+                part_number=FAILURE_PART,
+                station="DFW",
+                condition=InventoryCondition.serviceable,
+                expires_on=TODAY + timedelta(days=400),
+                last_counted_on=TODAY - timedelta(days=1),
+                last_verified_at=datetime.now(),
+                verified_by="Stores",
+            ),
+        ]
+    )
+
+    for i, tail in enumerate(FAILURE_REMOVAL_TAILS):
+        session.add(
+            RemovalHistory(
+                part_number=FAILURE_PART,
+                fleet_type="CRJ900",
+                station="DFW",
+                tail_number=tail,
+                removed_on=TODAY - timedelta(days=85 - i * 25),
+                reason=RemovalReason.failure,
+            )
+        )
+
+    # Texture: a couple of unrelated, one-off removals (below the
+    # stocking threshold, so they don't themselves raise a suggestion).
+    session.add_all(
+        [
+            RemovalHistory(
+                part_number="BRAKE-ASSY", fleet_type="E175", station="DFW", tail_number="N513EV",
+                removed_on=TODAY - timedelta(days=45), reason=RemovalReason.scheduled,
+            ),
+            RemovalHistory(
+                part_number="TIRE-NOSE", fleet_type="CRJ900", station="ORD", tail_number="N502EV",
+                removed_on=TODAY - timedelta(days=20), reason=RemovalReason.expiry,
+            ),
+        ]
+    )
+    session.commit()
+
+
 def main() -> None:
     fleet = load_fleet()
     rng = random.Random(SEED)
@@ -386,6 +575,12 @@ def main() -> None:
 
         seed_shipping_requests(session)
         session.commit()
+
+        seed_pick_demo(session)
+        seed_expiring_lots_demo(session, parts_by_number)
+        seed_failure_demo(session, parts_by_number)
+
+    generate_tag_images()
 
     print(f"Seeded comat.db: {len(fleet['stations'])} stations, "
           f"{len(fleet['aircraft'])} aircraft, {len(fleet['parts'])} parts.")

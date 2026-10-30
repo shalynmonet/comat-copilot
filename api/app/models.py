@@ -25,6 +25,7 @@ class PlanStatus(str, Enum):
     approved = "approved"
     at_risk = "at_risk"
     re_routed = "re_routed"
+    pending_verification = "pending_verification"
     shipped = "shipped"
     installed = "installed"
     cancelled = "cancelled"
@@ -44,6 +45,9 @@ class PlanEventType(str, Enum):
     approved = "approved"
     overridden = "overridden"
     draft_created = "draft-created"
+    verification_required = "verification-required"
+    verified = "verified"
+    phantom_flagged = "phantom-flagged"
     shipped = "shipped"
     installed = "installed"
 
@@ -113,11 +117,40 @@ class ShippingRequestStatus(str, Enum):
     cancelled = "cancelled"
 
 
+class ShippingRequestTrigger(str, Enum):
+    expiry = "expiry"
+    failure = "failure"
+
+
+class RemovalReason(str, Enum):
+    failure = "failure"
+    scheduled = "scheduled"
+    expiry = "expiry"
+
+
+class StockingSuggestionStatus(str, Enum):
+    pending = "pending"
+    approved = "approved"
+
+
 class ShipmentDraftStatus(str, Enum):
     draft = "draft"
     ready = "ready"
     submitted = "submitted"
     superseded = "superseded"
+
+
+class VerifyTaskStatus(str, Enum):
+    open = "open"
+    matched = "matched"
+    mismatched = "mismatched"
+
+
+class PartRequestStatus(str, Enum):
+    open = "open"
+    picked = "picked"
+    issued = "issued"
+    flagged = "flagged"
 
 
 class Station(SQLModel, table=True):
@@ -128,6 +161,11 @@ class Station(SQLModel, table=True):
     has_maintenance: bool = False
     stores_capacity: int = 0
     pal_number: Optional[str] = None
+    # Share of this station's photo verifications that have turned up a
+    # mismatch -- nudged up on every verify_task mismatch (see
+    # app/planner/confidence.py), fed back into confidence for every
+    # spare at this station.
+    discrepancy_rate: float = 0.0
 
 
 class Aircraft(SQLModel, table=True):
@@ -166,6 +204,25 @@ class InventoryItem(SQLModel, table=True):
     condition: InventoryCondition
     expires_on: date
     last_counted_on: date
+    # The shelf-life lot this unit belongs to -- what M3's Expiring Lot
+    # Report is keyed by (see app/adapters/m3_adapter.py's
+    # get_expiring_lots). Defaults to the serial when a part isn't
+    # tracked in distinct lots.
+    lot: Optional[str] = None
+    # Shelf/bin location within the station -- what a PickSlip tells a
+    # mechanic to go find (see app/adapters/m3_adapter.py's
+    # get_expected_stock/create_part_request).
+    location: Optional[str] = None
+
+    # Inventory confidence: whether the record is likely to match what's
+    # actually on the shelf. See app/planner/confidence.py for the
+    # formula; confidence here is a cached snapshot, refreshed whenever
+    # something that feeds it changes (seeding, a verify_task resolving).
+    last_verified_at: Optional[datetime] = None
+    verified_by: Optional[str] = None
+    move_count_30d: int = 0
+    confidence: float = 1.0
+    phantom_flag: bool = False
 
 
 class Flight(SQLModel, table=True):
@@ -213,6 +270,7 @@ class Plan(SQLModel, table=True):
     pending_cost: Optional[float] = None
     pending_risk_score: Optional[float] = None
     pending_reason: Optional[str] = None
+    pending_spare_serial: Optional[str] = Field(default=None, foreign_key="inventoryitem.serial")
 
     # Shipping: priority/profile/route the planner assigned, and the
     # resulting shipment's tracked state. See app/config.py for what each
@@ -231,6 +289,13 @@ class Plan(SQLModel, table=True):
     aog_desk_override_by: Optional[str] = None
     override_reason: Optional[str] = None
 
+    # The exact inventory row this plan's committed option depends on --
+    # only set for COMAT/transfer (a spare), never for buy. Lets the
+    # verification gate (app/planner/verification.py) and a later
+    # pick-and-issue flow find precisely which record to check or update,
+    # rather than re-guessing from option/source.
+    spare_serial: Optional[str] = Field(default=None, foreign_key="inventoryitem.serial")
+
 
 class PlanEvent(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -244,18 +309,30 @@ class ShippingRequest(SQLModel, table=True):
     """Raised as soon as a part is known to be expiring -- by Copilot's own
     scan, maintenance control, or Stores -- so Stores can review and submit
     instead of retyping from scratch. See app/adapters/safe_adapter.py and
-    the Stores Queue page."""
+    the Stores Queue page.
+
+    serial is usually set (the specific installed part this is about),
+    but is None for a station-level restock request -- e.g. Copilot
+    flagging that disposing of an expiring lot would leave a station
+    with no valid spare at all, with no specific installed part driving
+    the need yet (see app/planner/expiring_lots.py)."""
 
     id: Optional[int] = Field(default=None, primary_key=True)
     part_number: str = Field(foreign_key="part.part_number")
-    serial: str = Field(foreign_key="installedpart.serial")
+    serial: Optional[str] = Field(default=None, foreign_key="installedpart.serial")
     station_needed: str = Field(foreign_key="station.code")
     needed_by: date
     priority: Priority
     raised_by: RaisedBy
     status: ShippingRequestStatus = ShippingRequestStatus.open
+    # expiry (the default) or failure -- most parts are actually replaced
+    # on condition or after failure, not on a schedule (see
+    # app/planner/failures.py and POST /failures).
+    trigger: ShippingRequestTrigger = ShippingRequestTrigger.expiry
+    notes: Optional[str] = None  # the write-up, for a failure-triggered request
     plan_id: Optional[int] = Field(default=None, foreign_key="plan.id")
     shipment_draft_id: Optional[int] = Field(default=None, foreign_key="shipmentdraft.id")
+    created_at: datetime = Field(default_factory=datetime.now)
 
 
 class ShipmentDraft(SQLModel, table=True):
@@ -271,3 +348,120 @@ class ShipmentDraft(SQLModel, table=True):
     missing_fields: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     created_at: datetime
     updated_at: datetime
+
+
+class VerifyTask(SQLModel, table=True):
+    """Raised when a plan's committed option depends on a spare below the
+    confidence threshold -- Stores photographs the part tag/data plate to
+    confirm it's really there before the plan can proceed. See
+    app/planner/verification.py and app/adapters/verify_tag.py."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    inventory_serial: str = Field(foreign_key="inventoryitem.serial")
+    plan_id: int = Field(foreign_key="plan.id")
+    status: VerifyTaskStatus = VerifyTaskStatus.open
+    reason: str  # the confidence formula's top reason, e.g. "last verified 62 days ago"
+    confidence_at_creation: float
+    created_at: datetime
+    resolved_at: Optional[datetime] = None
+    photo_filename: Optional[str] = None
+    extracted_part_number: Optional[str] = None
+    extracted_serial: Optional[str] = None
+    extracted_condition: Optional[str] = None
+
+
+class PartRequest(SQLModel, table=True):
+    """Digital pick-and-issue: a mechanic's parts list becomes a request,
+    the stock clerk picks against M3's expected stock (location +
+    serial), and a photo of the shelf tag replaces hand-writing it and
+    retyping it into M3. See app/adapters/m3_adapter.py and
+    app/planner/pick_issue.py."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    mechanic: str
+    tail_number: str = Field(foreign_key="aircraft.tail_number")
+    part_number: str = Field(foreign_key="part.part_number")
+    quantity: int = 1
+    station: str = Field(foreign_key="station.code")
+    status: PartRequestStatus = PartRequestStatus.open
+
+    # What M3 expected to find, set when the request is created.
+    expected_location: Optional[str] = None
+    expected_serial: Optional[str] = Field(default=None, foreign_key="inventoryitem.serial")
+
+    # What the photo actually showed, once picked.
+    picked_location: Optional[str] = None
+    picked_serial: Optional[str] = Field(default=None, foreign_key="inventoryitem.serial")
+    photo_filename: Optional[str] = None
+
+    # Set only when status is flagged: why, and where to look instead.
+    flagged_reason: Optional[str] = None
+    suggested_next: Optional[str] = None
+
+    created_at: datetime
+    picked_at: Optional[datetime] = None
+    issued_at: Optional[datetime] = None
+
+
+class ExpiringLotActionType(str, Enum):
+    use = "use"
+    move = "move"
+    replace = "replace"
+
+
+class ExpiringLotActionStatus(str, Enum):
+    pending = "pending"
+    approved = "approved"
+
+
+class ExpiringLotAction(SQLModel, table=True):
+    """One row per expiring lot M3's report surfaced, with Copilot's
+    recommended action and whether a human has approved it yet. See
+    app/planner/expiring_lots.py."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    inventory_serial: str = Field(foreign_key="inventoryitem.serial")
+    lot: str
+    action: ExpiringLotActionType
+    reason: str
+    status: ExpiringLotActionStatus = ExpiringLotActionStatus.pending
+    # Set once approved, for a "move" action -- the resulting transfer plan.
+    plan_id: Optional[int] = Field(default=None, foreign_key="plan.id")
+    unit_cost: float  # the part's unit cost at creation time, for the "shelf-life value saved" stat
+    created_at: datetime
+    approved_at: Optional[datetime] = None
+
+
+class RemovalHistory(SQLModel, table=True):
+    """Every part that's come off an aircraft -- failure, scheduled
+    maintenance, or expiry -- logged so app/planner/stocking.py can work
+    out failure rates per part and fleet type. POST /failures logs one
+    for every failure reported; the rest is seeded history standing in
+    for however many months of real M3/SCEPTRE removal records a pilot
+    would have."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    part_number: str = Field(foreign_key="part.part_number")
+    fleet_type: str
+    station: str = Field(foreign_key="station.code")
+    tail_number: str = Field(foreign_key="aircraft.tail_number")
+    removed_on: date
+    reason: RemovalReason
+
+
+class StockingSuggestion(SQLModel, table=True):
+    """A station that operates a fleet type with a real failure history
+    for some part, but doesn't hold a spare of it today. A human
+    approves (raises an STD request to position one); see
+    app/planner/stocking.py."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    part_number: str = Field(foreign_key="part.part_number")
+    fleet_type: str
+    station: str = Field(foreign_key="station.code")
+    failure_count: int
+    reason: str
+    status: StockingSuggestionStatus = StockingSuggestionStatus.pending
+    request_id: Optional[int] = Field(default=None, foreign_key="shippingrequest.id")
+    created_at: datetime
+    approved_at: Optional[datetime] = None

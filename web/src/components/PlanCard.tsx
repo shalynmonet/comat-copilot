@@ -16,7 +16,7 @@ interface Props {
   error: string | null;
 }
 
-const EDITABLE_STATUSES = new Set(["proposed", "approved", "at_risk", "re_routed"]);
+const EDITABLE_STATUSES = new Set(["proposed", "approved", "at_risk", "re_routed", "pending_verification"]);
 const OVERRIDE_REASONS: OverrideReason[] = [
   "flight_usually_full",
   "preferred_vendor",
@@ -157,6 +157,18 @@ export function PlanCard({
         </div>
       )}
 
+      {plan && plan.status === "pending_verification" && (
+        <div className="at-risk-banner">
+          <div className="row">
+            <span className="status-badge" data-status="pending_verification">
+              pending verification
+            </span>
+            <span>the committed spare needs a photo check</span>
+          </div>
+          <p className="empty-hint">See Verify Tasks below — Stores photographs the part tag to confirm it's there.</p>
+        </div>
+      )}
+
       {loadingCandidates ? (
         <p className="empty-hint">Loading options…</p>
       ) : (
@@ -187,6 +199,15 @@ export function PlanCard({
                 </div>
                 <div className="detail">{c.detail}</div>
                 {c.is_dangerous_goods && <div className="dg-badge">⚠ Dangerous goods</div>}
+                {c.confidence !== null && (
+                  <div
+                    className="confidence-badge"
+                    data-level={c.confidence < 0.4 ? "low" : c.confidence < 0.6 ? "mid" : "high"}
+                  >
+                    confidence {(c.confidence * 100).toFixed(0)}%
+                    {c.confidence < 0.6 ? ` — ${c.low_confidence_reason}` : ""}
+                  </div>
+                )}
                 {isSelected && <div className="current-tag">current plan</div>}
 
                 {editable &&

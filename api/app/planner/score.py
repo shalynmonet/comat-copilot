@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from app.config import load_private_codes
+from app.config import load_private_codes, load_settings
 from app.models import Plan, PlanStatus, Priority
 from app.planner.candidates import Candidate
 
@@ -38,6 +38,12 @@ def score_candidate(candidate: Candidate, deadline: datetime, priority: Optional
     score = candidate.cost + RISK_WEIGHT * risk * AOG_COST
     if priority == Priority.std:
         score += load_private_codes().std_bump_risk * AOG_COST
+    if candidate.confidence is not None:
+        # A spare we're less sure is really there ranks worse, even
+        # though it isn't disqualified outright -- see
+        # app/planner/confidence.py and app/planner/verification.py,
+        # which gates low-confidence sources behind a photo verify.
+        score += (1 - candidate.confidence) * load_settings().confidence.confidence_score_weight * AOG_COST
     return ScoredCandidate(candidate=candidate, risk_score=risk, score=score)
 
 
@@ -64,4 +70,5 @@ def to_plan(installed_serial: str, scored: ScoredCandidate, status: PlanStatus =
         risk_score=scored.risk_score,
         status=status,
         reason=c.detail,
+        spare_serial=c.spare_serial,
     )

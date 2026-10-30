@@ -9,7 +9,6 @@ from typing import Optional
 
 from sqlmodel import Session
 
-from app.adapters.safe_adapter import build_draft
 from app.models import (
     OVERRIDE_REASON_LABELS,
     InstalledPart,
@@ -18,13 +17,10 @@ from app.models import (
     PlanEvent,
     PlanEventType,
     PlanOption,
-    PlanStatus,
-    ShipmentDraft,
-    ShipmentDraftStatus,
 )
 from app.planner.candidates import build_candidates, deadline_for
-from app.planner.priority_rules import assign_priority_profile_route
 from app.planner.score import score_candidate
+from app.planner.verification import finish_approval
 
 
 class NoSuchCandidate(Exception):
@@ -40,32 +36,7 @@ def clear_pending(plan: Plan) -> None:
     plan.pending_cost = None
     plan.pending_risk_score = None
     plan.pending_reason = None
-
-
-def _build_and_save_draft(session: Session, plan: Plan, now: datetime) -> None:
-    """On approval: compute the plan's priority/profile/route, then build
-    and save a SAFE-ready draft for Stores to review. Copilot never
-    submits it -- that's a human action (see POST /shipments/{id}/submitted
-    in a later step). Logged as a "draft created" plan_event.
-    """
-    assign_priority_profile_route(session, plan, now)
-    result = build_draft(session, plan)
-
-    draft = ShipmentDraft(
-        plan_id=plan.id,
-        fields=result.fields,
-        status=ShipmentDraftStatus(result.status),
-        missing_fields=result.missing_fields,
-        created_at=now,
-        updated_at=now,
-    )
-    session.add(draft)
-
-    if result.missing_fields:
-        detail = f"draft created, status=draft -- missing: {', '.join(result.missing_fields)}"
-    else:
-        detail = "draft created, status=ready for Stores to review and submit"
-    session.add(PlanEvent(plan_id=plan.id, event_type=PlanEventType.draft_created, created_at=now, detail=detail))
+    plan.pending_spare_serial = None
 
 
 def approve_plan(session: Session, plan: Plan, now: Optional[datetime] = None) -> Plan:
@@ -79,15 +50,14 @@ def approve_plan(session: Session, plan: Plan, now: Optional[datetime] = None) -
         plan.cost = plan.pending_cost
         plan.risk_score = plan.pending_risk_score
         plan.reason = plan.pending_reason
+        plan.spare_serial = plan.pending_spare_serial
         clear_pending(plan)
 
-    plan.status = PlanStatus.approved
-    session.add(plan)
-    session.add(PlanEvent(plan_id=plan.id, event_type=PlanEventType.approved, created_at=now))
-    _build_and_save_draft(session, plan, now)
-    session.commit()
-    session.refresh(plan)
-    return plan
+    # finish_approval() computes priority/profile/route and either builds
+    # a ready draft or -- if the committed spare is below the confidence
+    # threshold -- creates a verify_task and parks the plan instead (see
+    # app/planner/verification.py).
+    return finish_approval(session, plan, now)
 
 
 def choose_alternative(
@@ -125,8 +95,8 @@ def choose_alternative(
     plan.flight_number = match.flight_number
     plan.cost = match.cost
     plan.risk_score = scored.risk_score
+    plan.spare_serial = match.spare_serial
     plan.reason = f"Planner override: {reason_text}"
-    plan.status = PlanStatus.approved
     clear_pending(plan)
 
     session.add(plan)
@@ -139,7 +109,4 @@ def choose_alternative(
             detail=f"chose {match.option.value} from {match.source}{via} instead -- {reason_text}",
         )
     )
-    _build_and_save_draft(session, plan, now)
-    session.commit()
-    session.refresh(plan)
-    return plan
+    return finish_approval(session, plan, now)

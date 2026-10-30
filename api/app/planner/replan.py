@@ -123,6 +123,7 @@ def replan_for_flight(session: Session, flight: Flight, now: Optional[datetime] 
                 plan.pending_flight_number = best.candidate.flight_number
                 plan.pending_cost = best.candidate.cost
                 plan.pending_risk_score = best.risk_score
+                plan.pending_spare_serial = best.candidate.spare_serial
                 plan.pending_reason = _pending_reason_for(
                     session, installed, part, aircraft, best, rejected, plan.priority, plan.is_ron_package, effective_now
                 )
@@ -148,6 +149,7 @@ def replan_for_flight(session: Session, flight: Flight, now: Optional[datetime] 
             plan.flight_number = best.candidate.flight_number
             plan.cost = best.candidate.cost
             plan.risk_score = best.risk_score
+            plan.spare_serial = best.candidate.spare_serial
             plan.reason = explain_plan(
                 best, rejected, part.description, installed.tail_number, aircraft.overnight_station, installed.expires_on
             )

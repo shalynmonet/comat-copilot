@@ -52,6 +52,9 @@ def get_candidates(installed_serial: str):
                 disqualified=False,
                 disqualified_reason=None,
                 is_dangerous_goods=r.candidate.is_dangerous_goods,
+                spare_serial=r.candidate.spare_serial,
+                confidence=r.candidate.confidence,
+                low_confidence_reason=r.candidate.low_confidence_reason,
             )
             for r in ranked
         ]
@@ -68,6 +71,9 @@ def get_candidates(installed_serial: str):
                 disqualified=True,
                 disqualified_reason=c.disqualified_reason,
                 is_dangerous_goods=c.is_dangerous_goods,
+                spare_serial=c.spare_serial,
+                confidence=c.confidence,
+                low_confidence_reason=c.low_confidence_reason,
             )
             for c in disqualified
         ]

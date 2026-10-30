@@ -16,19 +16,20 @@ from typing import Optional
 
 from sqlmodel import Session, select
 
+from app.adapters.m3_adapter import StockRecord, get_m3_adapter
 from app.models import (
     Aircraft,
     Flight,
     FlightStatus,
     InstalledPart,
     InventoryCondition,
-    InventoryItem,
     Part,
     PlanOption,
     Station,
     VendorQuote,
 )
-from app.planner.flight_search import search_flight_options
+from app.planner.confidence import compute_confidence
+from app.planner.flight_search import leg_bookability, search_flight_options
 
 COMAT_HANDLING_FEE = 25.0
 
@@ -53,6 +54,11 @@ class Candidate:
     disqualified: bool = False
     disqualified_reason: Optional[str] = None
     is_dangerous_goods: bool = False
+    # Only set for a spare-backed option (COMAT/transfer, never buy) --
+    # see app/planner/confidence.py for the formula.
+    spare_serial: Optional[str] = None
+    confidence: Optional[float] = None
+    low_confidence_reason: Optional[str] = None
 
 
 def _haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -63,14 +69,19 @@ def _haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> floa
     return 2 * EARTH_RADIUS_MILES * math.asin(math.sqrt(a))
 
 
-def _spares(session: Session, part_number: str, exclude_station: str) -> list[InventoryItem]:
-    rows = session.exec(
-        select(InventoryItem).where(
-            InventoryItem.part_number == part_number,
-            InventoryItem.station != exclude_station,
-        )
-    ).all()
-    return list(rows)
+def _spares(session: Session, part_number: str, exclude_station: str) -> list[StockRecord]:
+    records = get_m3_adapter().list_stock(session, part_number=part_number)
+    return [r for r in records if r.station != exclude_station]
+
+
+def _confidence_for(session: Session, spare: StockRecord, now: datetime):
+    station = session.get(Station, spare.station)
+    return compute_confidence(
+        last_verified_at=spare.last_verified_at,
+        move_count_30d=spare.move_count_30d,
+        station_discrepancy_rate=station.discrepancy_rate if station else 0.0,
+        now=now,
+    )
 
 
 def _comat_candidates(
@@ -86,10 +97,18 @@ def _comat_candidates(
                 Flight.sched_dep >= now,
             )
         ).all()
+        confidence = _confidence_for(session, spare, now)
         for flight in flights:
+            bookable, _used_override, cutoff_reason = leg_bookability(flight, now)
             reason = None
-            if spare.condition != InventoryCondition.serviceable:
+            if spare.phantom_flag:
+                reason = f"the {spare.station} spare is flagged as phantom -- not confirmed at this station"
+            elif spare.condition != InventoryCondition.serviceable:
                 reason = f"the {spare.station} spare is {spare.condition.value}"
+            elif spare.expires_on < flight.sched_arr.date():
+                reason = f"the {spare.station} spare expires {spare.expires_on} -- before this arrives"
+            elif not bookable:
+                reason = cutoff_reason
             elif part.is_dangerous_goods and not flight.accepts_dg:
                 reason = f"flight {flight.flight_number} doesn't accept dangerous goods"
             elif flight.cargo_capacity_lb < part.weight_lb:
@@ -108,6 +127,9 @@ def _comat_candidates(
                     disqualified=reason is not None,
                     disqualified_reason=reason,
                     is_dangerous_goods=part.is_dangerous_goods,
+                    spare_serial=spare.serial,
+                    confidence=confidence.confidence,
+                    low_confidence_reason=confidence.top_reason,
                 )
             )
     return candidates
@@ -124,11 +146,14 @@ def _comat_connection_candidates(
     no DG-accepting flight, etc.) wherever a direct flight exists."""
     candidates = []
     for spare in _spares(session, part.part_number, destination):
-        if spare.condition != InventoryCondition.serviceable:
+        if spare.condition != InventoryCondition.serviceable or spare.phantom_flag:
             continue
+        confidence = _confidence_for(session, spare, now)
         for option in search_flight_options(session, spare.station, destination, part, now, deadline):
             if not option.is_connection:
                 continue  # direct options are already covered above
+            if spare.expires_on < option.arrival.date():
+                continue  # the spare itself would expire before it arrives
             leg_numbers = [leg.flight.flight_number for leg in option.legs]
             candidates.append(
                 Candidate(
@@ -142,6 +167,9 @@ def _comat_connection_candidates(
                         f"arrives {option.arrival:%H:%M}"
                     ),
                     is_dangerous_goods=part.is_dangerous_goods,
+                    spare_serial=spare.serial,
+                    confidence=confidence.confidence,
+                    low_confidence_reason=confidence.top_reason,
                 )
             )
     return candidates
@@ -162,11 +190,16 @@ def _transfer_candidates(
         cost = distance * TRANSFER_RATE_PER_MILE + TRANSFER_DISPATCH_FEE
 
         reason = None
-        if spare.condition != InventoryCondition.serviceable:
+        if spare.phantom_flag:
+            reason = f"the {spare.station} spare is flagged as phantom -- not confirmed at this station"
+        elif spare.condition != InventoryCondition.serviceable:
             reason = f"the {spare.station} spare is {spare.condition.value}"
+        elif spare.expires_on < eta.date():
+            reason = f"the {spare.station} spare expires {spare.expires_on} -- before this arrives"
         elif eta > deadline:
             reason = "ground transfer would arrive after the deadline"
 
+        confidence = _confidence_for(session, spare, now)
         candidates.append(
             Candidate(
                 option=PlanOption.transfer,
@@ -178,6 +211,9 @@ def _transfer_candidates(
                 disqualified=reason is not None,
                 disqualified_reason=reason,
                 is_dangerous_goods=part.is_dangerous_goods,
+                spare_serial=spare.serial,
+                confidence=confidence.confidence,
+                low_confidence_reason=confidence.top_reason,
             )
         )
     return candidates

@@ -1,0 +1,60 @@
+# Tunable app behavior that isn't a private pilot code (see
+# private_codes.example.yaml for those) -- safe to check in, safe to
+# tune without touching code.
+
+confidence:
+  # confidence = base - penalties, clamped to [0, 1]. Each penalty is a
+  # weight times how "maxed out" that factor is (0-1), so every term is
+  # on the same scale and easy to compare when explaining the top reason.
+  #
+  # A spare that's simply never had a dedicated photo verification --
+  # true of most spares, most of the time -- should still land
+  # comfortably above the threshold on its own; confidence should only
+  # really drop when staleness combines with heavy recent handling
+  # and/or a station with a real discrepancy history.
+  base: 1.0
+  days_weight: 0.15
+  days_horizon: 90        # days since last verified at which the days penalty maxes out
+  moves_weight: 0.2
+  moves_cap: 5             # moves in the last 30 days at which the moves penalty maxes out
+  discrepancy_weight: 0.35  # station discrepancy_rate (already 0-1) applies at full weight
+
+  # Below this, a plan's committed spare needs a photo verification
+  # before the plan can go to "approved" / a ready draft.
+  verification_threshold: 0.6
+
+  # How much a single verify_task mismatch nudges a station's
+  # discrepancy_rate up (clamped to 1.0).
+  discrepancy_bump: 0.08
+
+  # How much scoring penalizes a low-confidence source: score +=
+  # (1 - confidence) * confidence_score_weight * AOG_COST (see
+  # app/planner/score.py). Small enough that it's a tie-breaker between
+  # otherwise-close options (e.g. two similarly-priced COMAT candidates),
+  # not something that overrides a genuinely cheaper/faster one just for
+  # being less certain -- that's what the verification gate (and, for an
+  # unscheduled failure, the time-aware skip in app/planner/failures.py)
+  # is for, not scoring.
+  confidence_score_weight: 0.01
+
+expiring_lots:
+  # How far ahead M3's Expiring Lot Report looks (see
+  # app/adapters/m3_adapter.py's get_expiring_lots).
+  window_days: 30
+  # How often a pilot's scheduler would run the scan -- informational
+  # here, since this demo triggers it on read (GET /expiring-lots)
+  # rather than running a real background scheduler.
+  scan_schedule: daily
+
+failures:
+  # When a failure's best spare is below the confidence threshold, Stores
+  # needs at least this many minutes before the flight's booking cutoff
+  # to get a photo verify done -- otherwise that spare is skipped for the
+  # next valid one (see app/planner/failures.py).
+  verify_time_buffer_minutes: 30
+
+stocking:
+  # A part/fleet-type pair needs at least this many logged failures
+  # before Copilot suggests stocking a spare where one's missing (see
+  # app/planner/stocking.py).
+  min_failures_to_suggest: 2

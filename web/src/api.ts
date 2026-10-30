@@ -26,6 +26,7 @@ export type PlanStatus =
   | "approved"
   | "at_risk"
   | "re_routed"
+  | "pending_verification"
   | "shipped"
   | "installed"
   | "cancelled";
@@ -42,6 +43,9 @@ export interface Candidate {
   disqualified: boolean;
   disqualified_reason: string | null;
   is_dangerous_goods: boolean;
+  spare_serial: string | null;
+  confidence: number | null;
+  low_confidence_reason: string | null;
 }
 
 export type OverrideReason = "flight_usually_full" | "preferred_vendor" | "spare_needed_elsewhere" | "other";
@@ -107,6 +111,7 @@ export interface Plan {
   is_ron_package: boolean;
   awb_number: string | null;
   shipment_status: ShipmentStatus | null;
+  spare_serial: string | null;
 }
 
 export type ShipmentDraftStatus = "draft" | "ready" | "submitted" | "superseded";
@@ -129,18 +134,22 @@ export interface FieldSpec {
 
 export type RaisedBy = "maintenance_control" | "stores" | "copilot";
 export type ShippingRequestStatus = "open" | "planned" | "drafted" | "submitted" | "fulfilled" | "cancelled";
+export type ShippingRequestTrigger = "expiry" | "failure";
 
 export interface ShippingRequest {
   id: number;
   part_number: string;
-  serial: string;
+  serial: string | null;
   station_needed: string;
   needed_by: string;
   priority: Priority;
   raised_by: RaisedBy;
   status: ShippingRequestStatus;
+  trigger: ShippingRequestTrigger;
+  notes: string | null;
   plan_id: number | null;
   shipment_draft_id: number | null;
+  created_at: string;
 }
 
 export interface Flight {
@@ -158,9 +167,132 @@ export interface Flight {
 export interface PlanEvent {
   id: number;
   plan_id: number;
-  event_type: "created" | "re-routed" | "approved" | "overridden" | "draft-created" | "shipped" | "installed";
+  event_type:
+    | "created"
+    | "re-routed"
+    | "approved"
+    | "overridden"
+    | "draft-created"
+    | "verification-required"
+    | "verified"
+    | "phantom-flagged"
+    | "shipped"
+    | "installed";
   created_at: string;
   detail: string | null;
+}
+
+export type InventoryCondition = "serviceable" | "unserviceable" | "quarantined";
+
+export interface InventoryItem {
+  serial: string;
+  part_number: string;
+  station: string;
+  condition: InventoryCondition;
+  expires_on: string;
+  last_counted_on: string;
+  location: string | null;
+  last_verified_at: string | null;
+  verified_by: string | null;
+  move_count_30d: number;
+  confidence: number;
+  phantom_flag: boolean;
+}
+
+export type VerifyTaskStatus = "open" | "matched" | "mismatched";
+
+export interface VerifyTask {
+  id: number;
+  inventory_serial: string;
+  plan_id: number;
+  status: VerifyTaskStatus;
+  reason: string;
+  confidence_at_creation: number;
+  created_at: string;
+  resolved_at: string | null;
+  photo_filename: string | null;
+  extracted_part_number: string | null;
+  extracted_serial: string | null;
+  extracted_condition: string | null;
+}
+
+export interface StationDiscrepancy {
+  station: string;
+  discrepancy_rate: number;
+}
+
+export interface DashboardStats {
+  aogs_avoided: number;
+  planeside_runs_avoided: number;
+  phantom_parts_caught: number;
+  station_discrepancy_rates: StationDiscrepancy[];
+  picks_verified_by_photo: number;
+  discrepancies_caught_at_pick: number;
+  shelf_life_value_saved: number;
+  failure_response_time_median_minutes: number | null;
+}
+
+export type ExpiringLotActionType = "use" | "move" | "replace";
+export type ExpiringLotActionStatus = "pending" | "approved";
+
+export interface ExpiringLotAction {
+  id: number;
+  inventory_serial: string;
+  lot: string;
+  action: ExpiringLotActionType;
+  reason: string;
+  status: ExpiringLotActionStatus;
+  plan_id: number | null;
+  unit_cost: number;
+  created_at: string;
+  approved_at: string | null;
+}
+
+export type StockingSuggestionStatus = "pending" | "approved";
+
+export interface StockingSuggestion {
+  id: number;
+  part_number: string;
+  fleet_type: string;
+  station: string;
+  failure_count: number;
+  reason: string;
+  status: StockingSuggestionStatus;
+  request_id: number | null;
+  created_at: string;
+  approved_at: string | null;
+}
+
+export const SAMPLE_TAG_PHOTOS = {
+  match: "tag-ord-oxy-btl-02-match.jpg",
+  mismatch: "tag-ord-oxy-btl-02-mismatch.jpg",
+};
+
+export const SAMPLE_PICK_PHOTOS = {
+  match: "tag-pick-starter-gen-match.jpg",
+  mismatch: "tag-pick-starter-gen-mismatch.jpg",
+};
+
+export type PartRequestStatus = "open" | "picked" | "issued" | "flagged";
+
+export interface PartRequest {
+  id: number;
+  mechanic: string;
+  tail_number: string;
+  part_number: string;
+  quantity: number;
+  station: string;
+  status: PartRequestStatus;
+  expected_location: string | null;
+  expected_serial: string | null;
+  picked_location: string | null;
+  picked_serial: string | null;
+  photo_filename: string | null;
+  flagged_reason: string | null;
+  suggested_next: string | null;
+  created_at: string;
+  picked_at: string | null;
+  issued_at: string | null;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -202,4 +334,39 @@ export const api = {
   exportShipmentUrl: (id: number, format: "json" | "csv") => `${API_URL}/shipments/${id}/export?format=${format}`,
   getRequests: (status?: ShippingRequestStatus) =>
     request<ShippingRequest[]>(`/requests${status ? `?status=${status}` : ""}`),
+  getVerifyTasks: (status?: VerifyTaskStatus) =>
+    request<VerifyTask[]>(`/verify-tasks${status ? `?status=${status}` : ""}`),
+  getInventoryItem: (serial: string) => request<InventoryItem>(`/inventory/${encodeURIComponent(serial)}`),
+  submitVerifyTaskPhoto: (taskId: number, photo: File, verifiedBy: string) => {
+    const body = new FormData();
+    body.append("photo", photo);
+    body.append("verified_by", verifiedBy);
+    return request<{ task: VerifyTask; inventory_item: InventoryItem; plan: Plan }>(
+      `/verify-tasks/${taskId}/photo`,
+      { method: "POST", body, headers: {} },
+    );
+  },
+  demoAssetUrl: (filename: string) => `${API_URL}/demo-assets/${filename}`,
+  getDashboardStats: () => request<DashboardStats>("/stats"),
+  getPartRequests: (status?: PartRequestStatus) =>
+    request<PartRequest[]>(`/part-requests${status ? `?status=${status}` : ""}`),
+  createPartRequest: (body: { mechanic: string; tail_number: string; part_number: string; quantity: number; station: string }) =>
+    request<PartRequest>("/part-requests", { method: "POST", body: JSON.stringify(body) }),
+  submitPickPhoto: (requestId: number, photo: File) => {
+    const body = new FormData();
+    body.append("photo", photo);
+    return request<PartRequest>(`/part-requests/${requestId}/photo`, { method: "POST", body, headers: {} });
+  },
+  getExpiringLots: () => request<ExpiringLotAction[]>("/expiring-lots"),
+  approveExpiringLotAction: (id: number) =>
+    request<ExpiringLotAction>(`/expiring-lots/${id}/approve`, { method: "POST" }),
+  reportFailure: (body: { tail_number: string; station: string; part_number: string; reported_by: RaisedBy; notes?: string }) =>
+    request<{ request: ShippingRequest; plan: Plan | null }>("/failures", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getStocking: (status?: StockingSuggestionStatus) =>
+    request<StockingSuggestion[]>(`/stocking${status ? `?status=${status}` : ""}`),
+  approveStockingSuggestion: (id: number) =>
+    request<StockingSuggestion>(`/stocking/${id}/approve`, { method: "POST" }),
 };
